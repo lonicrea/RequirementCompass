@@ -3,10 +3,13 @@ services:
     name: requirement-compass-backend
     env: python
     rootDir: backend
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: python -m uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
       - key: SECRET_KEY
         generateValue: true
       - key: DAILY_TOKEN_LIMIT
@@ -19,13 +22,3 @@ services:
       name: requirement-compass-db
       mountPath: /var/data
       sizeGB: 1
-
-  - type: web
-    name: requirement-compass-frontend
-    env: node
-    rootDir: frontend
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start -- -p $PORT
-    envVars:
-      - key: NEXT_PUBLIC_API_BASE_URL
-        value: https://requirement-compass-backend.onrender.com/api

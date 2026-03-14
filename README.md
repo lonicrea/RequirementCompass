@@ -13,15 +13,15 @@
 - `frontend/README.md`
 - `DEPLOY_FREE.md`（免費公開部署：Vercel + Cloudflare Tunnel）
 
-## 一鍵部署（Render）
-本專案已包含 `render.yaml`，可直接用 Blueprint 方式部署前後端。
+## 一鍵部署後端（Render）
+本專案已包含 `render.yaml`，可直接用 Blueprint 方式部署後端（永久網址）。
 
 1. 開啟：
    - `https://render.com/deploy?repo=https://github.com/lonicrea/RequirementCompass`
 2. 在 Render 後台填入後端環境變數：
    - `OPENAI_API_KEY`
-3. 點擊部署，等待兩個服務完成：
-   - `requirement-compass-backend`
-   - `requirement-compass-frontend`
+3. 點擊部署，等待服務 `requirement-compass-backend` 完成。
+4. 拿到後端網址後，設定前端（Vercel）環境變數：
+   - `NEXT_PUBLIC_API_BASE_URL=https://<your-backend>.onrender.com/api`
 
-部署完成後，直接打開前端網址即可外部訪問。
+部署完成後，前端改用 Vercel 網址對外訪問。
