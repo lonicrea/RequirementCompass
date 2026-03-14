@@ -1,0 +1,21 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "5000:5000"
+    env_file:
+      - ./backend/.env
+    environment:
+      - DB_PATH=/app/data/requirement_compass.db
+    volumes:
+      - backend_data:/app/output
+      - backend_db:/app/data
+  frontend:
+    build: ./frontend
+    ports:
+      - "5174:3000"
+    depends_on:
+      - backend
+volumes:
+  backend_data:
+  backend_db:

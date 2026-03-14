@@ -1,0 +1,29 @@
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Env and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Node/Next
+node_modules/
+.next/
+out/
+
+# Runtime data/logs
+*.log
+*.err
+*.db
+backend/output/
+
