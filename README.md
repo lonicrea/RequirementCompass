@@ -11,3 +11,16 @@
 請先閱讀：
 - `backend/README.md`
 - `frontend/README.md`
+
+## 一鍵部署（Render）
+本專案已包含 `render.yaml`，可直接用 Blueprint 方式部署前後端。
+
+1. 開啟：
+   - `https://render.com/deploy?repo=https://github.com/lonicrea/RequirementCompass`
+2. 在 Render 後台填入後端環境變數：
+   - `OPENAI_API_KEY`
+3. 點擊部署，等待兩個服務完成：
+   - `requirement-compass-backend`
+   - `requirement-compass-frontend`
+
+部署完成後，直接打開前端網址即可外部訪問。
