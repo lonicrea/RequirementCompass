@@ -15,10 +15,6 @@ services:
       - key: DAILY_TOKEN_LIMIT
         value: "0"
       - key: DB_PATH
-        value: /var/data/requirement_compass.db
+        value: /tmp/requirement_compass.db
       - key: OPENAI_API_KEY
         sync: false
-    disk:
-      name: requirement-compass-db
-      mountPath: /var/data
-      sizeGB: 1
