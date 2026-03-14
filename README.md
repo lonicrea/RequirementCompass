@@ -11,6 +11,7 @@
 請先閱讀：
 - `backend/README.md`
 - `frontend/README.md`
+- `DEPLOY_FREE.md`（免費公開部署：Vercel + Cloudflare Tunnel）
 
 ## 一鍵部署（Render）
 本專案已包含 `render.yaml`，可直接用 Blueprint 方式部署前後端。

@@ -35,3 +35,4 @@ uvicorn main:app --reload --host 0.0.0.0 --port 5000
 ## 補充說明
 - 若沒有 API 金鑰，後端會使用本機 stub 產生示例問題與報告。
 - 資料庫預設為 `requirement_compass.db`（Docker 情境下可用 `/app/data/requirement_compass.db`）。
+- 若要用 Cloudflare Tunnel 對外開放 API，可參考 `cloudflared.example.yml` 與根目錄 `DEPLOY_FREE.md`。
