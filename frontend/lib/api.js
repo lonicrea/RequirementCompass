@@ -4,6 +4,16 @@ const fallbackBase = 'http://localhost:5000/api'
 const DEFAULT_TIMEOUT_MS = 20000
 const SESSION_TIMEOUT_MS = 45000
 const LLM_TIMEOUT_MS = 90000
+const LOCAL_BASE_MIGRATIONS = [
+  {
+    test: /^https?:\/\/localhost:5002\/api$/i,
+    target: fallbackBase
+  },
+  {
+    test: /^https?:\/\/127\.0\.0\.1:5002\/api$/i,
+    target: 'http://127.0.0.1:5000/api'
+  }
+]
 
 const normalizeBase = (value) => {
   if (typeof value !== 'string') return ''
@@ -21,21 +31,50 @@ const decodeMaybeUri = (value) => {
   }
 }
 
+const migrateLocalBase = (value) => {
+  const normalized = normalizeBase(value)
+  if (!normalized) return ''
+  for (const rule of LOCAL_BASE_MIGRATIONS) {
+    if (rule.test.test(normalized)) return rule.target
+  }
+  return normalized
+}
+
+const isLocalBackend = (value) => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(String(value || ''))
+
+const isLocalPage = () => {
+  if (typeof window === 'undefined') return true
+  const host = String(window.location.hostname || '').toLowerCase()
+  return host === 'localhost' || host === '127.0.0.1'
+}
+
 export const getApiBase = () => {
-  const fromEnv = normalizeBase(process.env.NEXT_PUBLIC_API_BASE_URL)
+  const fromEnv = migrateLocalBase(process.env.NEXT_PUBLIC_API_BASE_URL)
   if (fromEnv) return fromEnv
 
   if (typeof window !== 'undefined') {
     const saved = localStorage.getItem('requirement_compass_api')
-    const fromStorage = normalizeBase(decodeMaybeUri(saved))
-    if (fromStorage) return fromStorage
+    const fromStorage = migrateLocalBase(decodeMaybeUri(saved))
+    if (fromStorage) {
+      if (saved !== fromStorage) {
+        localStorage.setItem('requirement_compass_api', fromStorage)
+      }
+      // 避免線上站點沿用本機 localhost 設定造成連線失敗。
+      if (isLocalBackend(fromStorage) && !isLocalPage()) {
+        localStorage.removeItem('requirement_compass_api')
+      } else {
+        return fromStorage
+      }
+    }
 
     // 相容舊版鍵名，讀到後會自動遷移到新鍵名。
     const legacy = localStorage.getItem('clarityai_alt_api')
-    const fromLegacy = normalizeBase(decodeMaybeUri(legacy))
+    const fromLegacy = migrateLocalBase(decodeMaybeUri(legacy))
     if (fromLegacy) {
-      localStorage.setItem('requirement_compass_api', fromLegacy)
-      return fromLegacy
+      if (!(isLocalBackend(fromLegacy) && !isLocalPage())) {
+        localStorage.setItem('requirement_compass_api', fromLegacy)
+        return fromLegacy
+      }
     }
   }
   return fallbackBase
@@ -43,7 +82,7 @@ export const getApiBase = () => {
 
 export const saveApiBase = (apiBase) => {
   if (typeof window === 'undefined') return
-  const normalized = normalizeBase(decodeMaybeUri(apiBase))
+  const normalized = migrateLocalBase(decodeMaybeUri(apiBase))
   if (normalized) localStorage.setItem('requirement_compass_api', normalized)
 }
 
