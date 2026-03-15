@@ -708,31 +708,108 @@ body .ant-btn-primary:active {
 
   .hero-grid {
     grid-template-columns: 1fr;
-    gap: 18px;
+    gap: 14px;
+  }
+
+  .hero-copy h1 {
+    font-size: clamp(30px, 8.2vw, 42px);
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+    margin: 0 0 14px;
+    max-width: 12ch;
   }
 
   .hero-sub {
-    font-size: 18px;
+    font-size: 15px;
+    line-height: 1.7;
+    max-width: 32ch;
+  }
+
+  .hero-kicker {
+    margin-bottom: 12px;
+    font-size: 10.5px;
+    letter-spacing: 0.09em;
+  }
+
+  .hero-badges {
+    margin-top: 14px;
+    gap: 8px;
   }
 
   .hero-actions {
+    margin-top: 18px;
     flex-direction: column;
     align-items: stretch;
+    gap: 10px;
   }
 
   .cta-solid,
   .cta-outline {
     min-width: 100%;
-    font-size: 20px;
+    height: 50px;
+    font-size: 19px;
   }
 
   .hero-art {
-    min-height: 300px;
+    min-height: 0;
+    margin-top: 4px;
+    display: flex;
+    justify-content: center;
+    overflow: visible;
   }
 
   .art-panel {
-    transform: none;
-    border-radius: 28px;
+    width: min(100%, 420px);
+    aspect-ratio: 1.18;
+    border-radius: 24px;
+    transform: perspective(900px) rotateY(-4deg) rotateX(1deg);
+    box-shadow: 0 18px 30px rgba(56, 61, 109, 0.18);
+  }
+
+  .art-header {
+    top: 8%;
+    left: 6%;
+    right: 6%;
+    height: 30px;
+  }
+
+  .art-row {
+    top: 21%;
+    left: 7%;
+    right: 7%;
+    gap: 10px;
+  }
+
+  .art-chart,
+  .art-donut {
+    height: 116px;
+  }
+
+  .art-cards {
+    left: 7%;
+    right: 7%;
+    bottom: 9%;
+    gap: 8px;
+  }
+
+  .art-cards span {
+    height: 56px;
+    border-radius: 12px;
+  }
+
+  .floating-arrow {
+    width: 52px;
+    height: 52px;
+    left: -16px;
+    bottom: 56px;
+    opacity: 0.9;
+  }
+
+  .floating-coin {
+    width: 50px;
+    height: 50px;
+    right: 8px;
+    bottom: -14px;
   }
 
   .feature-grid {
@@ -772,5 +849,58 @@ body .ant-btn-primary:active {
 
   .report-actions {
     gap: 8px;
+  }
+}
+
+@media (max-width: 480px) {
+  .landing-shell {
+    padding: 14px 10px 36px;
+  }
+
+  .hero-copy h1 {
+    font-size: clamp(28px, 8.4vw, 36px);
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    max-width: none;
+  }
+
+  .hero-badges {
+    margin-top: 12px;
+    gap: 8px;
+  }
+
+  .hero-badges span {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .hero-sub {
+    font-size: 14px;
+    line-height: 1.72;
+  }
+
+  .hero-actions {
+    margin-top: 14px;
+    gap: 8px;
+  }
+
+  .cta-solid,
+  .cta-outline {
+    height: 46px;
+    font-size: 18px;
+  }
+
+  .hero-art {
+    margin-top: 2px;
+  }
+
+  .art-panel {
+    width: 100%;
+    aspect-ratio: 1.24;
+    transform: none;
+  }
+
+  .floating-arrow {
+    display: none;
   }
 }

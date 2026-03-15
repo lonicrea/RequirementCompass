@@ -1487,7 +1487,7 @@ def _learning_submethod(sub_code: str) -> str:
 
 def _coding_submethod(sub_code: str) -> str:
     methods = {
-        "9.1": "需求釐清：把想法規格化為 I/O、限制、非功能、反需求與情境式驗收標準（Given-When-Then）。",
+        "9.1": "需求釐清：先做需求探索（目標/對象/場景/核心功能），再做方案設計（架構/I-O/技術路徑），最後輸出可執行提示詞與 Given-When-Then 驗收。",
         "9.2": "演算法選型：先鎖資料量級與操作比例，再比較候選方案複雜度、退化情況與條件式選擇。",
         "9.3": "程式生成：先出模組設計與介面契約，再產出可維護程式碼、最小測試與使用說明。",
         "9.4": "除錯：以 MRE 為核心，先分層定位（資料/邏輯/環境/依賴），再做最小驗證與回歸測試。",
@@ -1658,15 +1658,15 @@ def _classification_question_method(demand_classification: dict | None) -> str:
 {sub_rules}
 """
 
-    if coding_mode:
+    if primary_code == "9":
         target_subs = sub_codes or ["9.1"]
         sub_rules = "\n".join([f"- {code}：{_coding_submethod(code)}" for code in target_subs[:3]])
         return f"""
 程式設計與工程化（9.x）專屬提問法（必須遵守）：
-1) 先走九欄規格：目標、情境、I/O、限制、非功能、驗收、測試、風險、輸出格式。
-2) 問題要可驗收：每個核心需求至少對應一條可測試驗收條件（建議 Given-When-Then）。
-3) 生成程式時禁止杜撰外部 API/資料格式；不確定資訊一律標【待補】。
-4) 至少補一題測試覆蓋與一題安全/風險檢核，避免只談功能。
+1) 先做需求探索：優先釐清產品目標、目標使用者、核心場景、第一版關鍵功能與理想成品畫面。
+2) 再做方案設計：把產品想像轉成系統架構、資料流程、MVP 功能拆解與技術路徑。
+3) 最後才生成開發提示詞：輸出可直接開工的規格、驗收條件、風險與回滾建議。
+4) 技術細節在第二層補齊，不要在需求尚未清楚時一次問完，避免使用者回答負擔過高。
 5) 本次子類別提問重點：
 {sub_rules}
 """
@@ -2056,49 +2056,49 @@ CODING_SLOT_QUESTION_CONFIG: Dict[str, dict] = {
         "required": True,
     },
     "project_goal": {
-        "text": "你要完成的程式任務是什麼？",
+        "text": "你想做的產品，最終要替使用者解決什麼問題？",
         "type": "fill_blank",
         "options": None,
         "required": True,
     },
     "target_user": {
-        "text": "這個產品最主要服務哪一類使用者？",
+        "text": "這個產品主要會被誰使用？（越具體越好）",
         "type": "fill_blank",
         "options": None,
         "required": True,
     },
     "key_features": {
-        "text": "你希望第一版一定要有哪 3 到 5 個核心功能？",
+        "text": "如果先做第一版，你覺得一定不能缺少哪 3 到 5 個功能？",
         "type": "fill_blank",
         "options": None,
         "required": True,
     },
     "final_vision": {
-        "text": "你心中理想的最終版本，用一句話描述會是什麼樣子？",
+        "text": "你理想中的成品，用一句話描述會是什麼樣子？",
         "type": "fill_blank",
         "options": None,
         "required": True,
     },
     "tech_stack": {
-        "text": "要使用哪些語言、框架與執行環境？",
+        "text": "如果你有技術偏好，想用哪些語言或框架？（不知道可留空）",
         "type": "fill_blank",
         "options": None,
         "required": False,
     },
     "input_output": {
-        "text": "請描述輸入與輸出格式（含邊界條件）。",
+        "text": "請描述一次最關鍵操作：使用者輸入什麼，系統要回傳什麼？",
         "type": "fill_blank",
         "options": None,
         "required": False,
     },
     "constraints": {
-        "text": "有哪些硬限制（版本、依賴、時程、不可做事項）？",
+        "text": "有沒有不能妥協的限制？（例如時程、預算、部署平台）",
         "type": "fill_blank",
         "options": None,
         "required": False,
     },
     "acceptance": {
-        "text": "你怎麼判定結果合格？請給可測試驗收標準。",
+        "text": "什麼情況下你會認定這版已經成功？",
         "type": "fill_blank",
         "options": None,
         "required": False,
@@ -2161,10 +2161,10 @@ CODING_OPTIONAL_SLOT_ORDER: List[str] = [
 CODING_SLOT_KEYWORDS: Dict[str, List[str]] = {
     "coding_model": ["編程模型", "coding model", "copilot", "cursor", "gpt", "claude"],
     "prompt_language": ["提示詞語言", "prompt 語言", "prompt language", "最終提示詞使用什麼語言"],
-    "project_goal": ["程式任務", "要完成", "目標", "功能"],
-    "target_user": ["主要服務", "使用者", "目標使用者", "受眾"],
-    "key_features": ["核心功能", "第一版", "mvp", "一定要有", "功能清單"],
-    "final_vision": ["理想", "最終版本", "想像", "長成", "成功畫面"],
+    "project_goal": ["程式任務", "要完成", "目標", "功能", "痛點", "解決什麼問題"],
+    "target_user": ["主要服務", "使用者", "目標使用者", "受眾", "被誰使用", "哪一類人使用"],
+    "key_features": ["核心功能", "第一版", "mvp", "一定要有", "功能清單", "最不能少"],
+    "final_vision": ["理想", "最終版本", "想像", "長成", "成功畫面", "成品長什麼樣子"],
     "tech_stack": ["語言", "框架", "技術棧", "runtime", "環境"],
     "input_output": ["輸入", "輸出", "格式", "schema", "欄位"],
     "constraints": ["限制", "版本", "依賴", "不可做", "時程"],
@@ -2928,10 +2928,10 @@ def _extract_coding_focus_subject(idea: str) -> str:
 def _build_coding_slot_question_config(idea: str) -> Dict[str, dict]:
     subject = _extract_coding_focus_subject(idea)
     config = {key: dict(value) for key, value in CODING_SLOT_QUESTION_CONFIG.items()}
-    config["project_goal"]["text"] = f"圍繞「{subject}」，你的任務目標是什麼？最想先完成哪個成果？"
-    config["target_user"]["text"] = f"「{subject}」主要服務哪一類使用者？"
-    config["final_vision"]["text"] = f"你心中的「{subject}」理想最終版本，用一句話會怎麼描述？"
-    config["key_features"]["text"] = f"如果先做第一版，「{subject}」一定要有哪 3 到 5 個核心功能？"
+    config["project_goal"]["text"] = f"圍繞「{subject}」，你最想先解決哪個使用者痛點？"
+    config["target_user"]["text"] = f"「{subject}」最主要會被哪一類人使用？"
+    config["final_vision"]["text"] = f"你期待「{subject}」最後成品長什麼樣子？用一句話描述。"
+    config["key_features"]["text"] = f"如果先上第一版，「{subject}」最不能少的 3 到 5 個功能是什麼？"
     return config
 
 
@@ -3511,15 +3511,17 @@ def _coding_context_questions_from_idea(idea: str, include_technical: bool = Fal
     lowered = _core_idea_from_idea(idea).lower()
     subject = _extract_coding_focus_subject(idea)
     result: List[dict] = []
+    result.append({"text": f"站在使用者角度，「{subject}」最重要的使用情境是什麼？", "type": "fill_blank", "options": None})
+    result.append({"text": f"你希望使用者從進入「{subject}」到拿到結果，最順的三步是什麼？", "type": "fill_blank", "options": None})
     if any(token in lowered for token in ["地圖", "map", "導航"]):
         result.append({"text": f"在「{subject}」裡，地圖點位點開後要顯示哪些關鍵資訊？", "type": "fill_blank", "options": None})
     if any(token in lowered for token in ["預約", "訂單", "booking", "掛號"]):
         result.append({"text": f"「{subject}」最核心的一筆預約/訂單流程，從建立到完成要經過哪幾步？", "type": "fill_blank", "options": None})
     if any(token in lowered for token in ["登入", "會員", "auth", "權限"]):
         result.append({"text": f"「{subject}」需要哪些身分或權限角色？每個角色最常做的操作是什麼？", "type": "fill_blank", "options": None})
-    result.append({"text": f"以「{subject}」來看，使用者最關鍵的一條操作流程是什麼？", "type": "fill_blank", "options": None})
     result.append({"text": f"「{subject}」第一版上線後，你最希望使用者立刻感受到什麼價值？", "type": "fill_blank", "options": None})
     if include_technical:
+        result.append({"text": "如果要讓工程師最快開工，你希望先交付 Web、API、還是完整前後端？", "type": "choice", "options": ["先 Web 介面", "先後端 API", "先完整前後端", "我不確定，請你建議"]})
         if any(token in lowered for token in ["報錯", "error", "exception", "bug", "不能用", "失敗"]):
             result.append({"text": f"針對「{subject}」目前問題，請貼完整錯誤訊息與最小可重現步驟（MRE）。", "type": "fill_blank", "options": None})
             result.append({"text": "這個問題是最近哪次變更後開始出現的？", "type": "fill_blank", "options": None})
@@ -3531,8 +3533,7 @@ def _coding_context_questions_from_idea(idea: str, include_technical: bool = Fal
             result.append({"text": "有哪些外部行為不能改（輸入/輸出、例外、相容性）？", "type": "fill_blank", "options": None})
         if any(token in lowered for token in ["測試", "test"]):
             result.append({"text": "最怕漏掉哪 3 種失敗情境？", "type": "fill_blank", "options": None})
-    if not result:
-        result.append({"text": "你目前最卡的工程瓶頸是什麼？", "type": "fill_blank", "options": None})
+    result.append({"text": "你目前最卡的點是什麼？（需求不清楚、功能拆不開、還是技術實作）", "type": "fill_blank", "options": None})
     return result
 
 
@@ -3734,9 +3735,9 @@ def _mode_guiding_questions(mode_title: str, idea: str) -> List[dict]:
         ]
     if "編程" in mode_title:
         return [
-            {"text": f"圍繞「{subject}」，你最希望使用者在 30 秒內完成哪件事？", "type": "fill_blank", "options": None},
-            {"text": "第一版最重要的成果是什麼？", "type": "choice", "options": ["先能完整跑通核心流程", "先做出好體驗原型", "先把穩定性與錯誤處理做好", "先驗證市場需求", "不確定，請你建議"]},
-            {"text": "如果第一版只能做 3 個功能，你最想保留哪 3 個？", "type": "fill_blank", "options": None},
+            {"text": f"圍繞「{subject}」，你最想先解決的使用者痛點是什麼？", "type": "fill_blank", "options": None},
+            {"text": "第一版最優先要做到哪種結果？", "type": "choice", "options": ["先讓核心流程能跑通", "先做出可測試的原型", "先把穩定性與錯誤處理做好", "先驗證需求是否成立", "不確定，請你建議"]},
+            {"text": "如果第一版只能保留 3 個功能，你會選哪 3 個？", "type": "fill_blank", "options": None},
         ]
     if "對話" in mode_title:
         return [
@@ -5810,7 +5811,7 @@ def _classification_execution_focus(primary_code: str) -> str:
         "6": "先定轉換規格與保真邊界，再輸出結果，最後附錯誤與一致性檢查。",
         "7": "先證據後判斷，補替代解釋與偏誤檢核，避免過度自信結論。",
         "8": "先定學習目標與先備，再安排引導、練習、回饋與可驗收評量。",
-        "9": "先規格化 I/O、限制、測試與安全，再做實作，確保可驗收與可維護。",
+        "9": "先釐清產品想像（目標、使用者、場景、第一版功能），再推導可行技術方案（架構、I/O、限制、風險），最後輸出可直接開發的提示詞。",
         "10": "先定互動目的與邊界，再設計回合規則、語氣與成功判定方式。",
         "11": "先拆目標與里程碑，再補資源、指標、風險與調整機制。",
         "12": "僅提供安全、合規、一般性資訊，明確標示不確定性與專業轉介需求。",
@@ -5948,11 +5949,12 @@ def _qa_topic_key(question_text: str) -> str:
         "research_scope": ["研究範圍", "時間範圍", "地區範圍", "研究對象", "範圍界定"],
         "research_method": ["研究方法", "方法論", "研究設計", "methodology"],
         "sources_tools": ["資料來源", "史料來源", "研究工具", "資料庫", "文獻來源", "工具"],
-        "target_user": ["主要服務哪一類使用者", "目標使用者", "主要使用者"],
-        "key_features": ["第一版一定要有", "核心功能", "3 到 5 個核心功能"],
-        "final_vision": ["理想的最終版本", "最終版本", "一句話描述"],
-        "core_flow": ["操作流程", "關鍵流程", "主流程", "核心流程", "流程是什麼"],
-        "value": ["感受到什麼價值", "核心價值", "價值是什麼", "最明顯感受到"],
+        "project_goal": ["任務目標是什麼", "最想先解決哪個使用者痛點", "解決什麼問題", "想做的產品"],
+        "target_user": ["主要服務哪一類使用者", "目標使用者", "主要使用者", "主要會被哪一類人使用", "被誰使用"],
+        "key_features": ["第一版一定要有", "核心功能", "3 到 5 個核心功能", "最不能少", "不能缺少"],
+        "final_vision": ["理想的最終版本", "最終版本", "一句話描述", "成品長什麼樣子", "理想中的成品"],
+        "core_flow": ["操作流程", "關鍵流程", "主流程", "核心流程", "流程是什麼", "最順的三步", "進入到拿到結果"],
+        "value": ["感受到什麼價值", "核心價值", "價值是什麼", "最明顯感受到", "最優先要做到"],
         "style": ["風格", "語氣", "口吻", "設計風格"],
         "tech_stack": ["語言、框架與執行環境", "技術棧", "語言", "框架", "執行環境"],
         "io_spec": ["輸入與輸出格式", "i/o", "輸入輸出", "邊界條件"],
@@ -6008,6 +6010,7 @@ def _qa_topic_label(topic: str, fallback_question: str) -> str:
         "research_scope": "研究範圍",
         "research_method": "研究方法",
         "sources_tools": "資料來源與工具",
+        "project_goal": "產品核心目標",
         "target_user": "目標使用者",
         "key_features": "第一版核心功能",
         "final_vision": "理想成品想像",
@@ -6103,6 +6106,7 @@ def _qa_summary_lines(questions: List[dict], answers: List[dict], limit: int = 6
         generic_lines.append(_humanize_text(line))
 
     ordered_topics = [
+        "project_goal",
         "goal",
         "video_model",
         "coding_model",
@@ -6192,19 +6196,19 @@ def _augment_coding_prompt_fields(
     ).lower()
 
     target_user_answer = _collect_latest_answer_by_question_tokens(
-        questions, answers, ["主要服務哪一類使用者", "目標使用者", "主要使用者"]
+        questions, answers, ["主要服務哪一類使用者", "目標使用者", "主要使用者", "主要會被哪一類人使用", "被誰使用"]
     )
     if target_user_answer and not _text_has_any_token(target_user_answer, ["不知道", "不確定", "未提供"]):
         patched["task_goal"] = _merge_prompt_field(patched.get("task_goal", ""), f"主要使用者：{target_user_answer}")
 
     feature_answer = _collect_latest_answer_by_question_tokens(
-        questions, answers, ["第一版一定要有", "核心功能", "3 到 5 個核心功能"]
+        questions, answers, ["第一版一定要有", "核心功能", "3 到 5 個核心功能", "最不能少", "不能缺少"]
     )
     if feature_answer and not _text_has_any_token(feature_answer, ["不知道", "不確定", "未提供"]):
         patched["task_goal"] = _merge_prompt_field(patched.get("task_goal", ""), f"第一版核心功能：{feature_answer}")
 
     vision_answer = _collect_latest_answer_by_question_tokens(
-        questions, answers, ["理想的最終版本", "最終版本", "一句話描述"]
+        questions, answers, ["理想的最終版本", "最終版本", "一句話描述", "成品長什麼樣子", "理想中的成品"]
     )
     if vision_answer and not _text_has_any_token(vision_answer, ["不知道", "不確定", "未提供"]):
         patched["output_format"] = _merge_prompt_field(patched.get("output_format", ""), f"理想最終版本：{vision_answer}")
@@ -6215,7 +6219,9 @@ def _augment_coding_prompt_fields(
     if tech_answer and not _text_has_any_token(tech_answer, ["不知道", "不確定", "未提供"]):
         patched["constraints"] = _merge_prompt_field(patched.get("constraints", ""), f"技術棧：{tech_answer}")
     elif not _text_has_any_token(context_blob, ["react", "vue", "angular", "next", "node", "python", "java", "go", "typescript", "javascript", "框架", "語言"]):
-        if _text_has_any_token(idea_lower, ["地圖", "map", "網站", "web"]):
+        if _text_has_any_token(idea_lower, ["學習", "教育", "課程", "學生", "教學", "知識", "社群"]):
+            assumptions.append("技術棧預設：前端 TypeScript + React，後端 Python FastAPI（AI 任務）或 Node.js（業務 API），資料庫 PostgreSQL。")
+        elif _text_has_any_token(idea_lower, ["地圖", "map", "網站", "web"]):
             assumptions.append("技術棧預設：前端 TypeScript + React，地圖引擎 MapLibre GL（或 Leaflet），後端提供地圖資料 API。")
         else:
             assumptions.append("技術棧預設：沿用既有專案語言與框架；若無既有專案，先採 TypeScript + Node.js。")
@@ -6226,7 +6232,9 @@ def _augment_coding_prompt_fields(
     if io_answer and not _text_has_any_token(io_answer, ["不知道", "不確定", "未提供"]):
         patched["input_data"] = _merge_prompt_field(patched.get("input_data", ""), f"I/O 規格：{io_answer}")
     elif not _text_has_any_token(context_blob, ["i/o", "輸入為", "輸出為", "schema", "欄位", "回應欄位", "輸入資料格式"]):
-        if _text_has_any_token(idea_lower, ["地圖", "map"]):
+        if _text_has_any_token(idea_lower, ["學習", "教育", "課程", "學生", "教學", "知識", "社群"]):
+            assumptions.append("I/O 預設：輸入為學習目標、題目內容或使用者操作事件；輸出為建議內容、互動回饋與進度狀態。")
+        elif _text_has_any_token(idea_lower, ["地圖", "map"]):
             assumptions.append("I/O 預設：輸入為地點資料（名稱、座標、分類）與篩選條件；輸出為互動地圖標記、資訊彈窗與篩選結果。")
         else:
             assumptions.append("I/O 預設：輸入含必要業務參數與邊界值；輸出含成功結果、錯誤碼與可讀錯誤訊息。")
@@ -6279,6 +6287,7 @@ def _split_feature_items(raw: str, limit: int = 5) -> List[str]:
 
 def _collect_coding_signal(questions: List[dict], answers: List[dict]) -> Dict[str, str]:
     signal: Dict[str, str] = {
+        "project_goal": "",
         "goal": "",
         "target_user": "",
         "key_features": "",
@@ -6297,6 +6306,8 @@ def _collect_coding_signal(questions: List[dict], answers: List[dict]) -> Dict[s
         if not answer or _is_placeholder_like(answer):
             continue
         topic = _qa_topic_key(qtext)
+        if topic in {"project_goal", "goal"}:
+            signal["project_goal"] = answer
         if topic == "goal":
             signal["goal"] = answer
         elif topic == "target_user":
@@ -6368,27 +6379,34 @@ def _fallback_coding_solution_brief(
 ) -> Dict[str, object]:
     subject = _extract_coding_focus_subject(idea)
     signal = _collect_coding_signal(questions, answers)
+    goal_text = signal.get("project_goal") or signal.get("goal") or fields.get("task_goal", "")
     feature_text = signal.get("key_features") or fields.get("task_goal", "")
     features = _split_feature_items(feature_text, limit=5)
+    domain = _detect_coding_domain_hint(_core_idea_from_idea(idea))
 
     lowered = f"{_core_idea_from_idea(idea)} {feature_text}".lower()
     assumptions: List[str] = []
     if not features:
-        if any(token in lowered for token in ["學習", "教育", "課程", "高中", "學生"]):
+        if domain == "learning":
             features = ["學習任務關卡", "AI 即時提示", "學習進度與成就回饋", "錯題回顧與再挑戰"]
             assumptions.append("未明確提供功能清單，已按教育產品常見 MVP 補齊。")
-        elif any(token in lowered for token in ["地圖", "map"]):
+        elif domain == "map":
             features = ["地圖標記", "分類篩選", "關鍵字搜尋", "點位詳情彈窗"]
             assumptions.append("未明確提供功能清單，已按互動地圖常見 MVP 補齊。")
         else:
             features = ["核心主流程頁", "資料查詢與篩選", "結果詳情頁", "錯誤處理與回饋提示"]
             assumptions.append("未明確提供功能清單，已按通用 Web MVP 補齊。")
 
-    target_user = signal.get("target_user") or "主要使用者待確認（先以一般終端使用者設計）"
+    target_user = signal.get("target_user") or "一般終端使用者（可再指定）"
     value = signal.get("value") or "讓使用者能更快完成核心任務並獲得即時回饋"
     core_flow = signal.get("core_flow") or f"進入「{subject}」首頁 → 完成一次核心操作 → 看到結果與下一步引導"
     final_vision = signal.get("final_vision") or fields.get("output_format") or f"可穩定上線的「{subject}」第一版"
     tech_stack = signal.get("tech_stack") or "Web：TypeScript + React（前端）與 Node.js API（後端）"
+    if not signal.get("tech_stack"):
+        if domain == "learning":
+            tech_stack = "前端 React + TypeScript，後端 FastAPI（AI 任務）+ Node.js（業務 API），資料庫 PostgreSQL，快取 Redis。"
+        elif domain == "map":
+            tech_stack = "前端 React + TypeScript + MapLibre/Leaflet，後端 Node.js API，資料庫 PostgreSQL（含地理欄位）。"
 
     delivery_plan = [
         "定義資料模型與 API 契約（先固定輸入/輸出欄位）",
@@ -6397,9 +6415,21 @@ def _fallback_coding_solution_brief(
         "做驗收測試與部署前檢查",
     ]
     non_goals = ["第一版不做登入/權限系統", "第一版不做複雜後台管理", "第一版不做高成本即時協作功能"]
-    if any(token in lowered for token in ["學習", "教育", "課程", "學生"]):
+    if domain == "learning":
+        delivery_plan = [
+            "先定義學習任務與互動資料模型（題目、回饋、進度）",
+            "實作學習主流程與 AI 回饋 API",
+            "補齊進度統計、錯誤處理與邊界測試",
+            "驗收核心學習流程並完成部署檢查",
+        ]
         non_goals = ["第一版不做社群聊天", "第一版不做付費訂閱流程", "第一版不做跨校管理後台"]
-    elif any(token in lowered for token in ["地圖", "map"]):
+    elif domain == "map":
+        delivery_plan = [
+            "先建立點位資料模型與查詢 API",
+            "完成地圖主頁、點位互動與篩選功能",
+            "補齊邊界資料、錯誤處理與裝置相容測試",
+            "做驗收測試並完成部署檢查",
+        ]
         non_goals = ["第一版不做路線導航", "第一版不做大量即時定位追蹤", "第一版不做地圖編輯後台"]
 
     acceptance = [
@@ -6407,9 +6437,25 @@ def _fallback_coding_solution_brief(
         "Given 使用者輸入非法或邊界資料，When 送出請求，Then 系統回傳可理解錯誤訊息且不崩潰。",
         "Given 手機與桌機環境，When 執行核心流程，Then 互動與版面皆可正常使用。",
     ]
+    if domain == "learning":
+        acceptance = [
+            "Given 使用者進入學習流程，When 完成一次任務，Then 系統能回傳可理解的 AI 回饋與下一步建議。",
+            "Given 使用者中途中斷或輸入異常，When 重新操作，Then 進度與錯誤提示皆可正確處理。",
+            "Given 手機與桌機環境，When 執行核心學習流程，Then 互動、回饋與進度顯示皆正常。",
+        ]
+
+    if domain == "learning":
+        rationale = "先把學習願景轉成可驗收 MVP（核心任務、回饋、進度），再補強穩定性與測試，避免一開始過度設計。"
+    elif domain == "map":
+        rationale = "先鎖定點位資料與查詢主流程，再擴展互動與相容性，確保地圖產品先可用再擴充。"
+    else:
+        rationale = "先把模糊需求收斂成可執行主流程，再依限制補齊架構、測試與部署，確保第一版可落地。"
 
     return {
-        "product_positioning": f"打造「{subject}」的可上線 MVP，聚焦 {target_user} 的核心需求。",
+        "product_positioning": _dedupe_text_fragments(
+            f"打造「{subject}」的可上線 MVP，聚焦 {target_user} 的核心需求"
+            + (f"；核心目標：{goal_text}" if goal_text else "")
+        ),
         "target_users": target_user,
         "core_value": value,
         "mvp_features": features,
@@ -6420,6 +6466,7 @@ def _fallback_coding_solution_brief(
         "non_goals": non_goals,
         "assumptions": assumptions,
         "final_vision": final_vision,
+        "solution_rationale": rationale,
     }
 
 
@@ -6444,12 +6491,14 @@ def _synthesize_coding_solution_brief(
 請根據使用者需求，輸出一份「可執行的編程方案摘要」JSON。
 
 規則：
-1. 優先採用使用者已回答內容，但不要逐句照抄。
-2. 若資訊不足，可做保守合理假設並寫入 assumptions。
-3. 功能描述要可實作，不可空泛。
-4. mvp_features 限 3-5 項；delivery_plan 限 3-5 步；acceptance_gwt 限 3 條。
-4.1 non_goals 限 3 項，用「第一版不做...」格式。
-5. 僅輸出 JSON 物件，不要其他文字。
+1. 先做需求探索：抽取產品願景、目標使用者、核心場景與第一版價值。
+2. 再做方案設計：推導可行的系統架構、資料流、MVP 功能與技術路徑。
+3. 最後整理成可直接開工的開發摘要，不要逐句照抄使用者原話。
+4. 若資訊不足，可做保守合理假設並寫入 assumptions，不得輸出「未提供」類占位詞。
+5. 功能與流程描述要可實作，不可空泛。
+6. mvp_features 限 3-5 項；delivery_plan 限 3-5 步；acceptance_gwt 限 3 條；non_goals 限 3 項。
+7. solution_rationale 用 1 句說明為何這套方案能滿足需求。
+8. 僅輸出 JSON 物件，不要其他文字。
 
 [原始需求]
 {_core_idea_from_idea(idea)}
@@ -6476,7 +6525,8 @@ JSON schema:
   "acceptance_gwt": ["string"],
   "non_goals": ["string"],
   "assumptions": ["string"],
-  "final_vision": "string"
+  "final_vision": "string",
+  "solution_rationale": "string"
 }}
 """
         completion = client.chat.completions.create(
@@ -6501,6 +6551,7 @@ JSON schema:
             "core_user_flow",
             "tech_solution",
             "final_vision",
+            "solution_rationale",
         ]:
             value = str(data.get(key) or "").strip()
             if value and not _is_placeholder_like(value):
@@ -7374,11 +7425,17 @@ def _build_coding_solution_prompt(
         return (fallback or [])[:limit]
 
     role = _clean_text(fields.get("role"), "資深軟體工程師")
+    if _contains_end_user_identity_role(role):
+        role = "資深軟體工程師"
     positioning = _clean_text(coding_solution.get("product_positioning"), _clean_text(fields.get("task_goal"), "完成可上線第一版產品"))
     target_users = _clean_text(coding_solution.get("target_users"), "目標使用者")
     core_value = _clean_text(coding_solution.get("core_value"), "讓使用者更快完成核心任務並獲得即時回饋")
     core_flow = _clean_text(coding_solution.get("core_user_flow"), "進入首頁、完成核心操作、看到結果與下一步引導")
     tech_solution = _clean_text(coding_solution.get("tech_solution"), _clean_text(fields.get("constraints"), "沿用現有技術棧並保持可維護性"))
+    rationale = _clean_text(
+        coding_solution.get("solution_rationale"),
+        "先對齊產品願景，再轉成可執行的系統方案與驗收標準。",
+    )
 
     mvp_features = _clean_list(
         coding_solution.get("mvp_features"),
@@ -7413,7 +7470,8 @@ def _build_coding_solution_prompt(
         f"產品定位是{positioning.strip('。')}，核心價值是{core_value.strip('。')}。"
     )
     paragraph_2 = (
-        f"先交付可執行方案：MVP 必須包含 {feature_sentence}。"
+        f"你不是需求轉述器，而是解決方案設計者。"
+        f"先把產品想像轉成可實作架構，再交付可執行方案：MVP 必須包含 {feature_sentence}。"
         f"核心使用流程是：{core_flow.strip('。')}。"
         f"技術實作以 {tech_solution.strip('。')} 為主，並確保資料結構、API 契約、頁面流程、測試案例與部署步驟可直接執行。"
     )
@@ -7421,6 +7479,7 @@ def _build_coding_solution_prompt(
         f"實作順序建議為：{plan_sentence}。"
         f"第一版不做：{non_goal_sentence}。"
         f"驗收以以下標準判定：{acceptance_sentence}。"
+        f"方案理由：{rationale.strip('。')}。"
         f"回覆語言使用 {prompt_language}；先給結論，再補必要說明；資訊不足時先列待確認項目，不硬猜。"
         f"{(' 補充假設：' + assumption_sentence + '。') if assumption_sentence else ''}"
         f"建議流程是：{execution_focus.strip('。')}；{method_rule.strip('。')}。"
