@@ -34,6 +34,10 @@ const decodeMaybeUri = (value) => {
 const migrateLocalBase = (value) => {
   const normalized = normalizeBase(value)
   if (!normalized) return ''
+  // If only scheme + host is provided, default to this app's API prefix.
+  if (/^https?:\/\/[^/]+$/i.test(normalized)) {
+    return `${normalized}/api`
+  }
   for (const rule of LOCAL_BASE_MIGRATIONS) {
     if (rule.test.test(normalized)) return rule.target
   }
