@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
-import { Card, Checkbox, Input, Button, Space, Typography, Modal, Radio, message } from 'antd'
+import { App, Card, Checkbox, Input, Button, Space, Typography, Modal, Radio } from 'antd'
 import { api, decodeApiBaseFromQuery, saveApiBase } from '../../../lib/api'
 
 const { Title, Paragraph } = Typography
 
 export default function QuestionsPage() {
+  const { message } = App.useApp()
   const { sessionId } = useParams()
   const sessionIdText = String(sessionId || '')
   const search = useSearchParams()
@@ -238,12 +239,13 @@ export default function QuestionsPage() {
   const appendQuestions = async () => {
     setAppending(true)
     try {
+      const previousCount = questions.length
       const res = await api.appendQuestions(
         sessionIdText,
         '請新增一頁問題，避免與已有問題重複，並繼續深挖需求。'
       )
       const updated = res?.data?.questions || []
-      if (!updated.length) {
+      if (!updated.length || updated.length <= previousCount) {
         message.warning('沒有生成新問題，請重試')
         return
       }

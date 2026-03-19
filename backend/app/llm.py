@@ -2044,13 +2044,13 @@ IMAGE_SLOT_LABELS: Dict[str, str] = {
 
 CODING_SLOT_QUESTION_CONFIG: Dict[str, dict] = {
     "coding_model": {
-        "text": "你打算用哪個 AI 編程模型或助手？",
+        "text": "你準備把最終提示詞交給哪個編程 AI 使用？",
         "type": "choice",
         "options": ["GPT 系列", "Claude", "Gemini", "Cursor / IDE Agent", "GitHub Copilot", "其他/未確定"],
         "required": True,
     },
     "prompt_language": {
-        "text": "你希望最終提示詞使用什麼語言？",
+        "text": "最終提示詞要用哪種語言輸出？",
         "type": "choice",
         "options": ["繁體中文", "簡體中文", "英式英文", "美式英文", "日文", "韓文", "其他/未確定"],
         "required": True,
@@ -2144,8 +2144,6 @@ CODING_CORE_SLOT_ORDER: List[str] = [
     "prompt_language",
     "project_goal",
     "target_user",
-    "final_vision",
-    "key_features",
 ]
 
 CODING_OPTIONAL_SLOT_ORDER: List[str] = [
@@ -2284,10 +2282,6 @@ DIALOGUE_CORE_SLOT_ORDER: List[str] = [
     "dialogue_model",
     "prompt_language",
     "interaction_goal",
-    "context_anchor",
-    "scope_depth",
-    "desired_output",
-    "success_criteria",
 ]
 
 DIALOGUE_OPTIONAL_SLOT_ORDER: List[str] = [
@@ -2569,7 +2563,24 @@ def _is_music_ai_type(selected_ai_types: List[str]) -> bool:
 
 def _is_coding_ai_type(selected_ai_types: List[str]) -> bool:
     text = " ".join(str(item or "") for item in (selected_ai_types or [])).lower()
-    return any(token in text for token in ["編程類", "寫程式", "除錯", "重構", "測試生成", "coding"])
+    return any(
+        token in text
+        for token in [
+            "編程類",
+            "写程式",
+            "寫程式",
+            "程式碼",
+            "代码",
+            "除錯",
+            "重構",
+            "測試生成",
+            "coding",
+            "debug",
+            "refactor",
+            "copilot",
+            "cursor",
+        ]
+    )
 
 
 def _is_dialogue_ai_type(selected_ai_types: List[str]) -> bool:
@@ -2616,7 +2627,27 @@ def _is_coding_mode_from_idea(idea: str) -> bool:
     if _is_coding_ai_type(selected_ai_types):
         return True
     text = str(idea or "").lower()
-    return any(token in text for token in ["編程類", "程式", "程式碼", "除錯", "debug", "api", "後端", "前端"])
+    return any(
+        token in text
+        for token in [
+            "編程",
+            "寫程式",
+            "程式",
+            "程式碼",
+            "代碼",
+            "api",
+            "後端",
+            "前端",
+            "資料庫",
+            "重構",
+            "除錯",
+            "測試",
+            "網站",
+            "web app",
+            "mvp",
+            "部署",
+        ]
+    )
 
 
 def _is_dialogue_mode_from_idea(idea: str) -> bool:
@@ -2781,6 +2812,21 @@ def _mode_slot_from_question(question_text: str, slot_keywords: Dict[str, List[s
         if any(str(token or "").lower() in lowered for token in tokens):
             return slot
     return ""
+
+
+def _mode_asked_slots_from_questions(
+    questions_list: Optional[List[dict]],
+    slot_keywords: Dict[str, List[str]],
+) -> set[str]:
+    asked: set[str] = set()
+    for item in questions_list or []:
+        qtext = str((item or {}).get("text") if isinstance(item, dict) else item or "")
+        if not qtext:
+            continue
+        slot = _mode_slot_from_question(qtext, slot_keywords)
+        if slot:
+            asked.add(slot)
+    return asked
 
 
 def _mode_slot_question(slot: str, slot_config: Dict[str, dict]) -> dict:
@@ -2980,6 +3026,116 @@ def _build_dialogue_slot_question_config(idea: str) -> Dict[str, dict]:
     config["turn_rules"]["text"] = "每輪回覆你偏好什麼節奏？（例如先問再答、短答、一步一步）"
     config["success_criteria"]["text"] = "你會怎麼判斷這次結果是成功的？（可給 1-2 個標準）"
     return config
+
+
+def _dialogue_context_questions_from_idea(
+    idea: str,
+    has_history: bool = False,
+    covered_facets: Optional[set[str]] = None,
+) -> List[dict]:
+    return _dialogue_dynamic_followup_candidates(
+        idea=idea,
+        has_history=has_history,
+        covered_facets=covered_facets,
+    )
+
+
+def _dialogue_dynamic_followup_candidates(
+    idea: str,
+    has_history: bool = False,
+    covered_facets: Optional[set[str]] = None,
+) -> List[dict]:
+    subject = _extract_dialogue_subject(idea)
+    lowered = _core_idea_from_idea(idea).lower()
+    covered = covered_facets or set()
+
+    def add(
+        bucket: List[dict],
+        facet: str,
+        text: str,
+        q_type: str = "fill_blank",
+        options: Optional[List[str]] = None,
+    ) -> None:
+        if facet in covered:
+            return
+        bucket.append({"facet": facet, "text": text, "type": q_type, "options": options})
+
+    candidates: List[dict] = []
+    add(candidates, "goal", f"你想透過「{subject}」最後拿到的結果是什麼？")
+    add(candidates, "context", f"你現在最卡的點是在「{subject}」的哪一步？")
+    add(
+        candidates,
+        "depth",
+        "你希望回答到哪個深度？",
+        "choice",
+        ["先快速重點", "中等解析", "深入分析（含方法與反例）", "先簡後深，逐步展開"],
+    )
+    add(
+        candidates,
+        "format",
+        "你希望我最後整理成哪種形式，才最好直接拿去用？",
+        "choice",
+        ["可直接複製的完整內容", "條列重點", "段落版說明", "表格/對照表", "其他"],
+    )
+    add(candidates, "success", "怎樣才算這輪對話真的有幫到你？給我 1 到 2 個判準就好。")
+
+    # 進一步補齊常見決策變數。
+    add(candidates, "audience", "這份內容主要給誰看？他看完後要做什麼決定或行動？")
+    add(candidates, "constraints", "你有沒有不能踩的邊界？像語氣、資料來源、敏感話題或長度限制。")
+
+    if any(token in lowered for token in ["論文", "研究", "學術", "文獻"]):
+        add(candidates, "research_question", "如果先收斂成一句研究問題，你現在會怎麼寫？")
+        add(
+            candidates,
+            "research_scope",
+            "這個研究你想先收斂在哪個範圍？（時間、地區或研究對象）",
+        )
+        add(
+            candidates,
+            "research_method",
+            "你目前比較傾向哪種研究方法？",
+            "choice",
+            ["文獻回顧", "質性訪談", "量化分析", "混合方法", "尚未決定"],
+        )
+        add(candidates, "sources_tools", "你手上目前有哪些可用或可信任的資料來源？")
+
+    if any(token in lowered for token in ["客服", "客訴", "support", "工單"]):
+        add(candidates, "service_target", "這個客服情境裡，最常見的兩種問題是什麼？")
+        add(
+            candidates,
+            "service_tone",
+            "你希望客服回覆更像哪種風格？",
+            "choice",
+            ["先同理再解法", "直接給解法", "正式流程化", "親切口語化", "其他"],
+        )
+        add(candidates, "service_boundary", "有哪些情況一定要轉人工，而不是讓 AI 繼續回？")
+
+    if any(token in lowered for token in ["翻譯", "改寫", "摘要", "寫作", "文案"]):
+        add(candidates, "writing_input", "你現在手上已有什麼素材？沒有也可以直接說。")
+        add(
+            candidates,
+            "writing_tone",
+            "你希望文字讀起來更像哪種風格？",
+            "choice",
+            ["正式專業", "清楚中性", "說服導向", "故事感", "其他"],
+        )
+        add(candidates, "writing_length", "篇幅你希望控制在什麼範圍？（例如 200 字、800 字或三段）")
+
+    if any(token in lowered for token in ["口說", "語言", "陪練", "cefr", "面試英文"]):
+        add(candidates, "language_level", "你目前程度大概在哪？（例如 CEFR A2/B1/B2）")
+        add(
+            candidates,
+            "language_feedback",
+            "你希望我怎麼糾錯最有幫助？",
+            "choice",
+            ["只改影響理解的錯", "每輪改 1-2 個重點", "逐句糾正", "先不糾錯只練流暢", "其他"],
+        )
+
+    if has_history:
+        add(candidates, "iteration", "看完上一輪，你現在最想先修哪一個地方？")
+        add(candidates, "missing", "目前還差哪一塊資訊，讓你還沒辦法直接拿去用？")
+
+    return candidates
 
 
 def _dialogue_goal_labels(idea: str) -> str:
@@ -3508,59 +3664,136 @@ def _image_context_questions_from_idea(
 
 
 def _coding_context_questions_from_idea(idea: str, include_technical: bool = False) -> List[dict]:
-    lowered = _core_idea_from_idea(idea).lower()
+    # 保留舊函式名稱給相容路徑，實際轉接到新版動態問題生成器。
+    return _coding_dynamic_followup_candidates(idea=idea, has_history=include_technical)
+
+
+def _coding_dynamic_followup_candidates(
+    idea: str,
+    has_history: bool = False,
+    covered_facets: Optional[set[str]] = None,
+) -> List[dict]:
     subject = _extract_coding_focus_subject(idea)
-    result: List[dict] = []
-    result.append({"text": f"站在使用者角度，「{subject}」最重要的使用情境是什麼？", "type": "fill_blank", "options": None})
-    result.append({"text": f"你希望使用者從進入「{subject}」到拿到結果，最順的三步是什麼？", "type": "fill_blank", "options": None})
-    if any(token in lowered for token in ["地圖", "map", "導航"]):
-        result.append({"text": f"在「{subject}」裡，地圖點位點開後要顯示哪些關鍵資訊？", "type": "fill_blank", "options": None})
-    if any(token in lowered for token in ["預約", "訂單", "booking", "掛號"]):
-        result.append({"text": f"「{subject}」最核心的一筆預約/訂單流程，從建立到完成要經過哪幾步？", "type": "fill_blank", "options": None})
-    if any(token in lowered for token in ["登入", "會員", "auth", "權限"]):
-        result.append({"text": f"「{subject}」需要哪些身分或權限角色？每個角色最常做的操作是什麼？", "type": "fill_blank", "options": None})
-    result.append({"text": f"「{subject}」第一版上線後，你最希望使用者立刻感受到什麼價值？", "type": "fill_blank", "options": None})
-    if include_technical:
-        result.append({"text": "如果要讓工程師最快開工，你希望先交付 Web、API、還是完整前後端？", "type": "choice", "options": ["先 Web 介面", "先後端 API", "先完整前後端", "我不確定，請你建議"]})
-        if any(token in lowered for token in ["報錯", "error", "exception", "bug", "不能用", "失敗"]):
-            result.append({"text": f"針對「{subject}」目前問題，請貼完整錯誤訊息與最小可重現步驟（MRE）。", "type": "fill_blank", "options": None})
-            result.append({"text": "這個問題是最近哪次變更後開始出現的？", "type": "fill_blank", "options": None})
-        if any(token in lowered for token in ["api", "後端", "接口"]):
-            result.append({"text": f"「{subject}」的 API 需要哪些端點、驗證方式與回應欄位？", "type": "fill_blank", "options": None})
-        if any(token in lowered for token in ["前端", "網頁", "網站", "ui"]):
-            result.append({"text": f"「{subject}」前端要支援哪些裝置與主要互動流程？", "type": "fill_blank", "options": None})
-        if any(token in lowered for token in ["重構", "refactor"]):
-            result.append({"text": "有哪些外部行為不能改（輸入/輸出、例外、相容性）？", "type": "fill_blank", "options": None})
-        if any(token in lowered for token in ["測試", "test"]):
-            result.append({"text": "最怕漏掉哪 3 種失敗情境？", "type": "fill_blank", "options": None})
-    result.append({"text": "你目前最卡的點是什麼？（需求不清楚、功能拆不開、還是技術實作）", "type": "fill_blank", "options": None})
-    return result
-
-
-def _dialogue_context_questions_from_idea(idea: str) -> List[dict]:
-    subject = _extract_dialogue_subject(idea)
     lowered = _core_idea_from_idea(idea).lower()
-    result: List[dict] = []
-    if any(token in lowered for token in ["客服", "客訴", "support"]):
-        result.append({"text": f"就「{subject}」來看，你最常遇到的 2-3 種客戶問題是什麼？", "type": "fill_blank", "options": None})
-        result.append({"text": "面對這些問題時，你比較希望我怎麼回？", "type": "choice", "options": ["先安撫再給方案", "直接給處理步驟", "簡短明確回覆", "依情況切換"]})
-        result.append({"text": "有沒有一定要遵守的客服規則？（像退款、補償、敏感資訊）", "type": "fill_blank", "options": None})
-    if any(token in lowered for token in ["翻譯", "改寫", "摘要", "寫作"]):
-        result.append({"text": "有哪些詞一定要保留原樣？（例如術語、人名、專有名詞）", "type": "fill_blank", "options": None})
-        result.append({"text": "你希望我怎麼跟你合作最順？", "type": "choice", "options": ["直接給可用版本", "先草稿再調整", "先給提綱再展開", "看情況"]})
-    if any(token in lowered for token in ["聊天", "閒聊", "陪聊"]):
-        result.append({"text": "聊天節奏你偏好哪一種？", "type": "choice", "options": ["多問我幾個關鍵問題", "多給我資訊與觀點", "兩邊平衡"]})
-        result.append({"text": "如果你只回很短一句，我怎麼接會比較符合你的期待？", "type": "choice", "options": ["先整理你的意思再追問", "先給你幾個方向讓你選", "先示範一版再請你修正", "直接追問關鍵點"]})
-    if any(token in lowered for token in ["語言", "口說", "cefr", "練習"]):
-        result.append({"text": "你希望我修正到什麼程度？", "type": "choice", "options": ["每回合都修", "只改影響理解的錯", "最後再總結修正", "先不糾錯"]})
-        result.append({"text": "你現在最想優先提升哪一塊？", "type": "choice", "options": ["語法更準", "講起來更自然", "邏輯更清楚", "更流暢"]})
-    if any(token in lowered for token in ["論文", "研究", "學術", "文獻"]):
-        result.append({"text": "這次你比較希望我用哪種結構幫你整理？", "type": "choice", "options": ["IMRaD", "問題-證據-結論", "歷史脈絡式", "先不限"]})
-        result.append({"text": "你想優先用哪一類資料當依據？", "type": "choice", "options": ["期刊論文", "官方/統計資料庫", "新聞與產業報告", "混合來源"]})
-    if not result:
-        result.append({"text": f"回到「{subject}」，你現在最想先解決哪一個具體問題？", "type": "fill_blank", "options": None})
-        result.append({"text": "你偏好 AI 回覆偏短可執行，還是偏完整解釋？", "type": "choice", "options": ["短而可執行", "完整解釋", "依情境切換", "其他"]})
-    return result
+    covered = covered_facets or set()
+    advanced_signal = any(
+        token in lowered
+        for token in [
+            "api",
+            "sdk",
+            "資料庫",
+            "database",
+            "schema",
+            "auth",
+            "jwt",
+            "oauth",
+            "微服務",
+            "microservice",
+            "react",
+            "next",
+            "node",
+            "fastapi",
+            "docker",
+            "k8s",
+            "ci/cd",
+            "redis",
+            "queue",
+            "websocket",
+            "gcp",
+            "aws",
+            "azure",
+        ]
+    )
+    ux_signal = any(token in lowered for token in ["體驗", "介面", "流程", "易用", "新手", "轉化", "留存"])
+
+    def add(
+        bucket: List[dict],
+        facet: str,
+        text: str,
+        q_type: str = "fill_blank",
+        options: Optional[List[str]] = None,
+    ) -> None:
+        if facet in covered:
+            return
+        bucket.append({"facet": facet, "text": text, "type": q_type, "options": options})
+
+    candidates: List[dict] = []
+    if not has_history:
+        # 第一輪先把產品價值與核心流程問清楚，避免一開始就進入實作細節。
+        add(candidates, "goal", f"你希望「{subject}」上線後，使用者第一個會明顯感受到的價值是什麼？")
+        add(candidates, "user", f"這個產品最核心的使用者是誰？他現在在什麼步驟最容易卡住？")
+        add(candidates, "moment", f"如果只看前 30 秒，你最希望使用者完成哪個關鍵動作？")
+        add(candidates, "scope", f"第一版你願意先做小一點：哪 3 件事一定做、哪 2 件事可以先不做？")
+        add(candidates, "success", "如果要你驗收第一版，你會看哪 1 到 2 個可觀察結果？")
+        add(candidates, "risk", "你最怕踩到哪種風險？（例如資料錯誤、速度太慢、流程中斷、上線回滾困難）")
+        add(candidates, "reference", "有沒有你想參考的產品或流程？你想保留哪個優點，避免哪個缺點？")
+
+    if any(token in lowered for token in ["學習", "教學", "課程", "教育"]):
+        add(
+            candidates,
+            "edu_outcome",
+            "以學習平台來看，你最想先提升哪個結果：學習動機、完成率，還是學習成果？",
+            "choice",
+            ["學習動機", "學習效率", "學習成果", "三者都重要，請你排序", "其他"],
+        )
+        add(candidates, "edu_flow", "學生第一次進來時，你希望他先完成哪個學習任務，才能願意繼續用下去？")
+
+    if any(token in lowered for token in ["地圖", "map", "導航", "座標"]):
+        add(candidates, "map_detail", "使用者點開地圖點位時，第一屏最少要看到哪三種資訊？")
+        add(
+            candidates,
+            "map_interaction",
+            "地圖互動你要先優化哪一種？",
+            "choice",
+            ["快速找點位", "探索故事脈絡", "篩選比較資料", "收藏與分享", "其他"],
+        )
+
+    if any(token in lowered for token in ["社群", "論壇", "交流", "貼文", "討論"]):
+        add(candidates, "community_flow", "在交流平台裡，你最看重哪條互動流程（發問、回答、回饋、收藏）？")
+
+    if any(token in lowered for token in ["登入", "會員", "auth", "權限"]):
+        add(candidates, "roles", "第一版要分哪些角色？各角色最重要的一個操作是什麼？")
+
+    if any(token in lowered for token in ["報錯", "error", "exception", "bug", "失敗", "不能用"]):
+        add(candidates, "bug_step", "目前最常在哪一步出錯？請描述一次可重現流程。")
+        add(
+            candidates,
+            "bug_priority",
+            "你要先解哪類問題？",
+            "choice",
+            ["阻塞流程的錯誤", "資料不正確", "速度太慢", "穩定性與回滾風險", "其他"],
+        )
+
+    if ux_signal:
+        add(candidates, "ux_focus", "在體驗上你最在意哪件事：上手速度、資訊清楚，還是操作回饋？")
+
+    # 第二輪起補齊工程落地細節，讓「增加問題」持續深挖，不重複第一輪。
+    if has_history or advanced_signal:
+        add(candidates, "io", "拿你最關鍵那條流程來看：使用者輸入什麼，系統中間怎麼處理，最後輸出什麼？")
+        add(candidates, "constraint", "在時程、部署、相依或預算上，有哪些硬限制一定不能踩？")
+        add(candidates, "data_model", "這個產品最核心的資料實體有哪些？（例如使用者、內容、任務、紀錄）")
+        add(candidates, "api_contract", "你希望前後端先定哪一個 API 契約，才能最快開始並行開發？")
+        add(candidates, "error_handling", "如果使用者輸入不完整或服務失敗，你希望系統怎麼回應才不會卡住流程？")
+        add(
+            candidates,
+            "performance",
+            "你對效能的最低要求是什麼？",
+            "choice",
+            ["主要操作 1 秒內回應", "主要操作 3 秒內回應", "先能用、效能後補", "不確定，請你建議"],
+        )
+        add(candidates, "deployment", "第一版要部署在哪裡？（本機、Vercel/Render、雲服務或公司內網）")
+        add(candidates, "observability", "上線後你最想先看到哪種監控資訊？（錯誤率、延遲、使用量、轉換率）")
+        add(candidates, "test_strategy", "你希望第一版至少補哪些測試，才敢上線？")
+        add(candidates, "rollback", "如果上線出問題，你希望回滾策略怎麼設計才安全？")
+        add(candidates, "security", "有沒有一定要先做的安全底線？（登入、權限、資料保護、輸入驗證）")
+        if advanced_signal:
+            add(candidates, "architecture", "你有偏好的架構方向嗎？若還沒定，也可以說你想優先保證哪個品質目標。")
+            add(candidates, "quality_gate", "工程品質你最在意哪一項？（效能、穩定、可維護、安全）")
+
+    return [
+        {"text": item["text"], "type": item["type"], "options": item["options"]}
+        for item in candidates
+    ]
 
 
 def _request_mode_dynamic_questions_with_llm(
@@ -3590,7 +3823,18 @@ def _request_mode_dynamic_questions_with_llm(
         asked_questions = [f"- {str(item.get('text', '')).strip()}" for item in (existing_questions or []) if str(item.get("text", "")).strip()]
 
         style_rule = "7. 問句要像真人會說的口吻，短句、自然、好理解，不要文件腔。"
-        if mode_label != "對話":
+        mode_extra_rules = ""
+        if mode_label == "編程需求":
+            style_rule = (
+                "7. 問句必須像資深工程顧問在討論產品：貼合上下文、單點深挖、避免模板清單。"
+                " 若使用者回答抽象，追問可觀察行為與可驗收結果。"
+            )
+            mode_extra_rules = (
+                "8. 你不是問卷機器；每次只追一個最關鍵缺口，優先處理高風險不確定性。\n"
+                "9. 禁止固定句型輪播，不要出現『請描述』『請列出』這種表單語。\n"
+                "10. 盡量引用使用者原句中的關鍵名詞，讓問題看起來是延續對話，而不是換題。"
+            )
+        elif mode_label != "對話需求":
             style_rule = "7. 問句自然清楚，避免過度術語。"
 
         instruction = f"""
@@ -3604,6 +3848,7 @@ def _request_mode_dynamic_questions_with_llm(
 5. 不要再問：{avoid_slots_hint}
 6. 若原始需求含具體名詞（角色、產品、功能、場景），至少 2 題直接圍繞這些名詞。
 {style_rule}
+{mode_extra_rules}
 
 [原始需求]
 {idea}
@@ -3637,7 +3882,13 @@ def _request_mode_dynamic_questions_with_llm(
                 data = _extract_json_payload(content)
                 if isinstance(data, list):
                     normalized = _normalize_questions(data, student_mode=False)
-                    picked = _filter_video_question_candidates(normalized, existing_questions, max_questions)
+                    topic_dedupe = mode_label not in {"對話需求"}
+                    picked = _filter_video_question_candidates(
+                        normalized,
+                        existing_questions,
+                        max_questions,
+                        dedupe_by_topic=topic_dedupe,
+                    )
                     if picked:
                         return picked
             except Exception:
@@ -3652,6 +3903,7 @@ def _filter_video_question_candidates(
     candidates: List[dict],
     existing_questions: List[dict],
     max_questions: int,
+    dedupe_by_topic: bool = True,
 ) -> List[dict]:
     if max_questions <= 0:
         return []
@@ -3677,10 +3929,10 @@ def _filter_video_question_candidates(
         if key in seen:
             continue
         topic = _qa_topic_key(text)
-        if topic != "generic" and topic in seen_topics:
+        if dedupe_by_topic and topic != "generic" and topic in seen_topics:
             continue
         seen.add(key)
-        if topic != "generic":
+        if dedupe_by_topic and topic != "generic":
             seen_topics.add(topic)
         filtered.append(
             {
@@ -3992,6 +4244,8 @@ def _build_video_alignment_questions(
     custom_base_url: Optional[str] = None,
     custom_model: Optional[str] = None,
 ) -> List[dict]:
+    history_questions = questions_list or []
+    asked_slots = _mode_asked_slots_from_questions(history_questions, VIDEO_SLOT_KEYWORDS)
     slot_values = _extract_video_slot_values(
         idea=idea,
         questions_list=questions_list,
@@ -4003,6 +4257,8 @@ def _build_video_alignment_questions(
     for slot in VIDEO_CORE_SLOT_ORDER:
         if len(result) >= VIDEO_TARGET_QUESTIONS_WITHOUT_TAIL:
             break
+        if slot in asked_slots:
+            continue
         if str(slot_values.get(slot) or "").strip():
             continue
         result.append(_video_slot_question(slot))
@@ -4010,7 +4266,7 @@ def _build_video_alignment_questions(
     remaining = max(0, VIDEO_TARGET_QUESTIONS_WITHOUT_TAIL - len(result))
     heuristic_dynamic = _filter_video_question_candidates(
         _video_theme_questions_from_idea(idea, slot_values=slot_values),
-        result,
+        history_questions + result,
         remaining,
     )
     result.extend(heuristic_dynamic)
@@ -4021,7 +4277,7 @@ def _build_video_alignment_questions(
         llm_dynamic = _request_video_dynamic_questions_with_llm(
             idea=idea,
             slot_values=slot_values,
-            existing_questions=result,
+            existing_questions=history_questions + result,
             max_questions=remaining,
             custom_api_key=custom_api_key,
             custom_base_url=custom_base_url,
@@ -4033,9 +4289,9 @@ def _build_video_alignment_questions(
     optional_candidates = [
         _video_slot_question(slot)
         for slot in VIDEO_OPTIONAL_SLOT_ORDER
-        if not str(slot_values.get(slot) or "").strip()
+        if slot not in asked_slots and not str(slot_values.get(slot) or "").strip()
     ]
-    result.extend(_filter_video_question_candidates(optional_candidates, result, remaining))
+    result.extend(_filter_video_question_candidates(optional_candidates, history_questions + result, remaining))
 
     # 確保最後一題為 narrative，且總題數不超過上限。
     tail_question = {
@@ -4083,10 +4339,14 @@ def _build_mode_alignment_questions(
     tail_if_story_present: str,
     include_assessment: bool = True,
     allow_llm_dynamic: bool = True,
+    questions_list: Optional[List[dict]] = None,
+    slot_keywords: Optional[Dict[str, List[str]]] = None,
     custom_api_key: Optional[str] = None,
     custom_base_url: Optional[str] = None,
     custom_model: Optional[str] = None,
 ) -> List[dict]:
+    history_questions = questions_list or []
+    asked_slots = _mode_asked_slots_from_questions(history_questions, slot_keywords or {})
     assessment_text = _build_mode_initial_assessment(
         mode_title=mode_title,
         mode_goal=mode_goal,
@@ -4110,6 +4370,8 @@ def _build_mode_alignment_questions(
     for slot in core_slot_order:
         if len(result) >= target_without_tail:
             break
+        if slot in asked_slots:
+            continue
         if str(slot_values.get(slot) or "").strip():
             continue
         result.append(_mode_slot_question(slot, slot_config))
@@ -4118,10 +4380,10 @@ def _build_mode_alignment_questions(
     remaining = max(0, target_without_tail - len(result))
     if remaining > 0 and _is_vague_request_for_guidance(idea, slot_values):
         guiding_candidates = _mode_guiding_questions(mode_title, idea)
-        result.extend(_filter_video_question_candidates(guiding_candidates, result, min(2, remaining)))
+        result.extend(_filter_video_question_candidates(guiding_candidates, history_questions + result, min(2, remaining)))
 
     remaining = max(0, target_without_tail - len(result))
-    result.extend(_filter_video_question_candidates(heuristic_candidates, result, remaining))
+    result.extend(_filter_video_question_candidates(heuristic_candidates, history_questions + result, remaining))
 
     remaining = max(0, target_without_tail - len(result))
     if remaining > 0 and allow_llm_dynamic:
@@ -4130,7 +4392,7 @@ def _build_mode_alignment_questions(
                 mode_label=mode_title,
                 idea=idea,
                 slot_values=slot_values,
-                existing_questions=result,
+                existing_questions=history_questions + result,
                 max_questions=remaining,
                 focus_hint=llm_focus_hint,
                 avoid_slots_hint=llm_avoid_slots_hint,
@@ -4144,9 +4406,9 @@ def _build_mode_alignment_questions(
     optional_candidates = [
         _mode_slot_question(slot, slot_config)
         for slot in optional_slot_order
-        if not str(slot_values.get(slot) or "").strip()
+        if slot not in asked_slots and not str(slot_values.get(slot) or "").strip()
     ]
-    result.extend(_filter_video_question_candidates(optional_candidates, result, remaining))
+    result.extend(_filter_video_question_candidates(optional_candidates, history_questions + result, remaining))
 
     has_story = bool(str(slot_values.get("must_have_elements") or slot_values.get("context_anchor") or "").strip())
     tail_question = {
@@ -4226,6 +4488,8 @@ def _build_image_alignment_questions(
         tail_if_story_present="最後補充：還有沒有你希望我們再強化的細節（例如材質、情緒、鏡頭感）？",
         include_assessment=False,
         allow_llm_dynamic=True,
+        questions_list=questions_list,
+        slot_keywords=IMAGE_SLOT_KEYWORDS,
         custom_api_key=custom_api_key,
         custom_base_url=custom_base_url,
         custom_model=custom_model,
@@ -4310,6 +4574,8 @@ def _build_music_alignment_questions(
         tail_if_story_present="最後補充：還有沒有你想再強化的段落、轉場或聽感細節？",
         include_assessment=False,
         allow_llm_dynamic=True,
+        questions_list=questions_list,
+        slot_keywords=MUSIC_SLOT_KEYWORDS,
         custom_api_key=custom_api_key,
         custom_base_url=custom_base_url,
         custom_model=custom_model,
@@ -4337,6 +4603,7 @@ def _build_music_alignment_questions(
     return filtered
 
 
+
 def _build_coding_alignment_questions(
     idea: str,
     questions_list: Optional[List[dict]] = None,
@@ -4346,8 +4613,12 @@ def _build_coding_alignment_questions(
     custom_base_url: Optional[str] = None,
     custom_model: Optional[str] = None,
 ) -> List[dict]:
-    has_history = bool((questions_list or []) and (answers_list or []))
-    dynamic_slot_config = _build_coding_slot_question_config(idea)
+    history_questions = questions_list or []
+    has_history = bool(history_questions) or bool(answers_list or [])
+    first_round = not bool(history_questions)
+    asked_slots = _mode_asked_slots_from_questions(history_questions, CODING_SLOT_KEYWORDS)
+    target_without_tail = 10
+    max_total = 10
     slot_values = _extract_mode_slot_values(
         idea=idea,
         slot_order=CODING_SLOT_ORDER,
@@ -4356,27 +4627,151 @@ def _build_coding_alignment_questions(
         answers_list=answers_list,
         feedback=feedback,
     )
-    return _build_mode_alignment_questions(
-        mode_title="編程需求",
-        mode_goal=_coding_goal_labels(idea),
-        idea=idea,
-        slot_values=slot_values,
-        core_slot_order=CODING_CORE_SLOT_ORDER,
-        optional_slot_order=CODING_OPTIONAL_SLOT_ORDER if has_history else [],
-        slot_config=dynamic_slot_config,
-        missing_labels=CODING_SLOT_LABELS,
-        heuristic_candidates=_coding_context_questions_from_idea(idea, include_technical=has_history),
-        llm_focus_hint="使用者目標、核心流程、第一版功能優先序、理想成品想像、不可妥協體驗",
-        llm_avoid_slots_hint="編程模型、提示詞語言、任務目標、目標使用者、核心功能、理想最終版本",
-        target_without_tail=CODING_TARGET_QUESTIONS_WITHOUT_TAIL,
-        max_total=CODING_MAX_TOTAL_QUESTIONS,
-        tail_if_story_missing="最後補充：還有沒有你最擔心的風險、回滾條件或部署限制？",
-        tail_if_story_present="最後補充：還有沒有你希望優先驗證的高風險場景？",
-        include_assessment=False,
-        custom_api_key=custom_api_key,
-        custom_base_url=custom_base_url,
-        custom_model=custom_model,
-    )
+
+    result: List[dict] = []
+    seen_texts = {
+        _question_dedupe_key(str(item.get("text", "")))
+        for item in history_questions
+        if isinstance(item, dict)
+    }
+
+    def _mark_seen(text: str) -> None:
+        key = _question_dedupe_key(text)
+        if key:
+            seen_texts.add(key)
+
+    def _is_seen(text: str) -> bool:
+        key = _question_dedupe_key(text)
+        return bool(key and key in seen_texts)
+
+    def _covered_facets() -> set[str]:
+        topic_to_facet: Dict[str, str] = {
+            "project_goal": "goal",
+            "target_user": "user",
+            "core_flow": "moment",
+            "value": "priority",
+            "acceptance": "success",
+            "test_scope": "success",
+            "constraint": "risk",
+            "io_spec": "io",
+            "tech_stack": "constraint",
+            "coding_model": "meta_model",
+            "prompt_language": "meta_language",
+        }
+        facet_rules: Dict[str, List[str]] = {
+            "goal": ["成果", "目標", "先完成", "解決", "價值", "痛點"],
+            "user": ["哪一類使用者", "誰最需要", "主要服務", "目標使用者"],
+            "moment": ["30 秒", "第一眼", "第一步"],
+            "priority": ["第一版最重要", "優先", "方向"],
+            "reference": ["參考產品", "保留", "避開"],
+            "success": ["成功", "指標", "判定", "驗收"],
+            "risk": ["風險", "回滾", "部署限制"],
+            "io": ["輸入", "輸出", "資料流"],
+            "constraint": ["硬限制", "時程", "相依", "部署", "預算"],
+            "edu_outcome": ["學習動機", "學習效率", "學習成果"],
+            "edu_flow": ["學習任務"],
+            "map_detail": ["點位", "第一屏", "地圖"],
+            "map_interaction": ["地圖互動"],
+            "community_flow": ["互動流程", "發問", "回答", "回饋"],
+            "roles": ["角色", "權限"],
+            "bug_step": ["重現流程", "第幾步出錯"],
+            "bug_priority": ["先解哪類問題", "先修"],
+        }
+        covered: set[str] = set()
+        for item in history_questions:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text", "")).lower()
+            topic = _qa_topic_key(text)
+            mapped = topic_to_facet.get(topic)
+            if mapped:
+                covered.add(mapped)
+            for facet, keys in facet_rules.items():
+                if any(k.lower() in text for k in keys):
+                    covered.add(facet)
+        return covered
+
+    # 固定題只在第一輪出現；後續點「增加問題」不再重問。
+    if first_round:
+        for slot in ["coding_model", "prompt_language"]:
+            if len(result) >= target_without_tail:
+                break
+            if slot in asked_slots:
+                continue
+            if str(slot_values.get(slot) or "").strip():
+                continue
+            candidate = _mode_slot_question(slot, CODING_SLOT_QUESTION_CONFIG)
+            text = str(candidate.get("text", ""))
+            if _is_seen(text):
+                continue
+            result.append(candidate)
+            _mark_seen(text)
+
+    # 優先讓 LLM 依上下文一次產出一批問題（每輪最多 10 題）。
+    remaining = max(0, target_without_tail - len(result))
+    if remaining > 0:
+        avoid_hints: List[str] = []
+        if "coding_model" in asked_slots or str(slot_values.get("coding_model") or "").strip():
+            avoid_hints.append("編程模型")
+        if "prompt_language" in asked_slots or str(slot_values.get("prompt_language") or "").strip():
+            avoid_hints.append("提示詞語言")
+        if first_round:
+            avoid_hints.append("完全照抄使用者原句，不延伸需求")
+
+        llm_dynamic = _request_mode_dynamic_questions_with_llm(
+            mode_label="編程需求",
+            idea=idea,
+            slot_values=slot_values,
+            existing_questions=history_questions + result,
+            max_questions=remaining,
+            focus_hint=(
+                "本輪目標是補齊 10 題左右的高價值追問。"
+                "優先問產品願景、核心使用者、關鍵流程、MVP 優先級、成功標準與高風險邊界。"
+                "提問要像真人產品/工程討論，不要模板語氣。"
+            ),
+            avoid_slots_hint="、".join(avoid_hints) if avoid_hints else "已問過的題目",
+            custom_api_key=custom_api_key,
+            custom_base_url=custom_base_url,
+            custom_model=custom_model,
+        )
+        for item in llm_dynamic:
+            text = str(item.get("text", "")).strip()
+            if not text or _is_seen(text):
+                continue
+            result.append(item)
+            _mark_seen(text)
+            if len(result) >= target_without_tail:
+                break
+
+    # LLM 題量不足時，用本地語境候選補齊（保留去重）。
+    remaining = max(0, target_without_tail - len(result))
+    if remaining > 0:
+        fallback_candidates = _coding_dynamic_followup_candidates(
+            idea=idea,
+            has_history=has_history,
+            covered_facets=_covered_facets(),
+        )
+        filtered = _filter_video_question_candidates(
+            fallback_candidates,
+            history_questions + result,
+            remaining,
+            dedupe_by_topic=True,
+        )
+        for item in filtered:
+            text = str(item.get("text", "")).strip()
+            if not text or _is_seen(text):
+                continue
+            result.append(item)
+            _mark_seen(text)
+            if len(result) >= target_without_tail:
+                break
+
+    if len(result) > max_total:
+        result = result[:max_total]
+
+    for idx, q in enumerate(result, start=1):
+        q["id"] = f"q{idx}"
+    return result
 
 
 def _build_dialogue_alignment_questions(
@@ -4389,8 +4784,8 @@ def _build_dialogue_alignment_questions(
     custom_model: Optional[str] = None,
 ) -> List[dict]:
     dynamic_slot_config = _build_dialogue_slot_question_config(idea)
-    core_slots = list(DIALOGUE_CORE_SLOT_ORDER)
-    optional_slots = [slot for slot in DIALOGUE_SLOT_ORDER if slot not in core_slots]
+    history_questions = questions_list or []
+    asked_slots = _mode_asked_slots_from_questions(history_questions, DIALOGUE_SLOT_KEYWORDS)
     slot_values = _extract_mode_slot_values(
         idea=idea,
         slot_order=DIALOGUE_SLOT_ORDER,
@@ -4399,27 +4794,97 @@ def _build_dialogue_alignment_questions(
         answers_list=answers_list,
         feedback=feedback,
     )
-    return _build_mode_alignment_questions(
-        mode_title="對話需求",
-        mode_goal=_dialogue_goal_labels(idea),
-        idea=idea,
-        slot_values=slot_values,
-        core_slot_order=core_slots,
-        optional_slot_order=optional_slots,
-        slot_config=dynamic_slot_config,
-        missing_labels=DIALOGUE_SLOT_LABELS,
-        heuristic_candidates=_dialogue_context_questions_from_idea(idea),
-        llm_focus_hint="依序補齊目標、背景情境、範圍深度、輸出形式、成功標準，並引用原始需求關鍵詞深挖",
-        llm_avoid_slots_hint="對話模型、提示詞語言、互動目標、背景情境、回答深度、輸出形式、成功標準",
-        target_without_tail=DIALOGUE_TARGET_QUESTIONS_WITHOUT_TAIL,
-        max_total=DIALOGUE_MAX_TOTAL_QUESTIONS,
-        tail_if_story_missing="最後補充：還有沒有不能踩到的禁忌話題或合規邊界？",
-        tail_if_story_present="最後補充：還有沒有你想強化的回覆風格或互動細節？",
-        include_assessment=False,
-        custom_api_key=custom_api_key,
-        custom_base_url=custom_base_url,
-        custom_model=custom_model,
-    )
+    result: List[dict] = []
+    has_history = bool((questions_list or []) and (answers_list or []))
+    target_without_tail = 1 if has_history else 3
+
+    # 只保留兩題必要固定題：模型與提示詞語言。
+    for slot in ["dialogue_model", "prompt_language"]:
+        if slot in asked_slots:
+            continue
+        if str(slot_values.get(slot) or "").strip():
+            continue
+        result.append(_mode_slot_question(slot, dynamic_slot_config))
+        if len(result) >= target_without_tail:
+            break
+
+    # 已覆蓋面向，避免重複追問。
+    covered_facets: set[str] = set()
+    slot_to_facet = {
+        "interaction_goal": "goal",
+        "context_anchor": "context",
+        "scope_depth": "depth",
+        "desired_output": "format",
+        "success_criteria": "success",
+        "target_audience": "audience",
+        "tone_boundary": "constraints",
+        "turn_rules": "process",
+        "correction_preference": "constraints",
+    }
+    for slot, facet in slot_to_facet.items():
+        if str(slot_values.get(slot) or "").strip():
+            covered_facets.add(facet)
+
+    question_topic_to_facet = {
+        "interaction_goal": "goal",
+        "context_anchor": "context",
+        "scope_depth": "depth",
+        "desired_output": "format",
+        "success_criteria_dialogue": "success",
+        "target_audience": "audience",
+        "tone_boundary": "constraints",
+        "turn_rules": "process",
+        "correction_preference": "constraints",
+    }
+    for q in history_questions:
+        q_text = str((q or {}).get("text") or "")
+        topic = _qa_topic_key(q_text)
+        facet = question_topic_to_facet.get(topic)
+        if facet:
+            covered_facets.add(facet)
+
+    remaining = max(0, target_without_tail - len(result))
+    if remaining > 0:
+        # 先請 LLM 補一題最關鍵缺口；若失敗再走本地候選。
+        llm_dynamic = _request_mode_dynamic_questions_with_llm(
+            mode_label="對話需求",
+            idea=idea,
+            slot_values=slot_values,
+            existing_questions=history_questions + result,
+            max_questions=remaining,
+            focus_hint=(
+                "每次只追問一個最關鍵缺口，優先目標/背景/範圍/輸出/成功標準；"
+                "要像真人自然追問，不要表單語氣，不要一次混問多個變數"
+            ),
+            avoid_slots_hint="對話模型、提示詞語言（這兩題若已問過不要重問）",
+            custom_api_key=custom_api_key,
+            custom_base_url=custom_base_url,
+            custom_model=custom_model,
+        )
+        result.extend(_filter_video_question_candidates(llm_dynamic, result, remaining))
+
+    remaining = max(0, target_without_tail - len(result))
+    if remaining > 0:
+        fallback_candidates = _dialogue_dynamic_followup_candidates(
+            idea=idea,
+            has_history=has_history,
+            covered_facets=covered_facets,
+        )
+        result.extend(
+            _filter_video_question_candidates(
+                fallback_candidates,
+                history_questions + result,
+                remaining,
+                dedupe_by_topic=False,
+            )
+        )
+
+    if len(result) > target_without_tail:
+        result = result[:target_without_tail]
+
+    for idx, q in enumerate(result, start=1):
+        q["id"] = f"q{idx}"
+    return result
 
 
 def _apply_classification_question_policy(
@@ -5175,6 +5640,148 @@ def process_answers_to_doc(
         logger.warning("final prompt still refusal-like after stabilization, forcing local fallback")
         final_prompt_text = _natural_prompt_fallback(final_prompt_text, prompt_language)
     return _render_final_prompt_only(final_prompt_text)
+
+
+def _rewrite_prompt_by_user_method(
+    prompt_text: str,
+    prompt_language: str,
+    mode_hint: str,
+    custom_api_key: Optional[str] = None,
+    custom_base_url: Optional[str] = None,
+    custom_model: Optional[str] = None,
+) -> str:
+    source = _strip_code_fence(prompt_text)
+    if not source:
+        return _natural_prompt_fallback("", prompt_language)
+
+    # 已是多媒體分段提示詞時，保留原格式，不做自然段改寫。
+    if "[Model Target]" in source and "[Core Prompt]" in source:
+        return source
+
+    resolved_api_key = custom_api_key if _has_valid_key(custom_api_key) else settings.openai_api_key
+    resolved_base_url = custom_base_url if _has_valid_key(custom_api_key) else "https://api.openai.com/v1"
+    resolved_model = custom_model or settings.qwen_model
+    if not _has_valid_key(resolved_api_key):
+        return _natural_prompt_fallback(source, prompt_language)
+
+    target_language = _normalize_prompt_language(prompt_language)
+    mode_label = mode_hint or "general"
+    mode_rule = ""
+    if mode_label == "coding":
+        mode_rule = (
+            "你必須把使用者的產品想像轉成可執行的工程方案，不可只重述使用者原句。"
+            "自然融入系統背景、核心流程、資料流、技術約束、邊界處理與驗收標準。"
+        )
+    elif mode_label == "dialogue":
+        mode_rule = (
+            "你必須輸出可直接投餵對話模型的工作說明書，強調角色、任務、回覆規則、思考流程與成功標準。"
+            "避免機械式欄位與重複句。"
+        )
+    else:
+        mode_rule = "保持 Role-Task-Context-Constraints-Output Format 的語義完整，但用自然段敘事呈現。"
+
+    instruction = f"""
+請嚴格依照以下方法重寫提示詞，並只輸出最終版本：
+
+方法規則（嚴格）：
+1) 採用 RTFC + Context（Role、Task、Format、Constraints、Context）語義，但不可輸出欄位標題。
+2) 輸出必須是 2~3 段自然語言，不可使用模板欄位（例如：任務目標、輸入資料、輸出格式）。
+3) 刪除重複、矛盾、空泛句；禁止出現「未提供、待確認、TBD、N/A」。
+4) 若資訊不足，用保守且可執行的預設補齊，並以一句自然語言說明可再調整。
+5) 內容要可直接交給下游 AI 執行，不是說明文件，不是問卷。
+6) 最終語言必須是：{target_language}。
+7) 模式：{mode_label}。{mode_rule}
+
+原始提示詞：
+{source}
+"""
+    try:
+        client = _client(resolved_api_key, resolved_base_url)
+        model = resolved_model
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "你是資深提示詞優化專家，只輸出最終可執行提示詞。"},
+                {"role": "user", "content": instruction},
+            ],
+            temperature=0.1,
+            timeout=25,
+        )
+        content = _strip_code_fence(str(completion.choices[0].message.content or "").strip())
+        if content and not _looks_like_refusal_text(content):
+            content = _collapse_repeated_clauses(_humanize_text(content))
+            return content.strip()
+    except Exception:
+        logger.exception("strict prompt rewrite failed")
+
+    return _natural_prompt_fallback(source, prompt_language)
+
+
+def generate_final_prompt_strict(
+    idea: str,
+    questions: List[dict],
+    answers: List[dict],
+    custom_api_key: Optional[str] = None,
+    custom_base_url: Optional[str] = None,
+    custom_model: Optional[str] = None,
+) -> str:
+    profile = _extract_profile_from_idea(idea)
+    demand_classification = profile.get("demand_classification") if isinstance(profile.get("demand_classification"), dict) else {}
+    primary_code, sub_codes = _classification_codes(demand_classification)
+    if not primary_code:
+        demand_classification = classify_demand(
+            idea=idea,
+            user_identity=profile.get("user_identity"),
+            language_region=profile.get("language_region"),
+            existing_resources=profile.get("existing_resources"),
+            custom_api_key=custom_api_key,
+            custom_base_url=custom_base_url,
+            custom_model=custom_model,
+        )
+        primary_code, sub_codes = _classification_codes(demand_classification)
+
+    selected_ai_types = profile.get("selected_ai_types") if isinstance(profile.get("selected_ai_types"), list) else []
+    selected_mode = _selected_mode_from_ai_types(selected_ai_types)
+    mode_hint = selected_mode or (
+        "coding" if primary_code == "9" else
+        "dialogue" if primary_code == "10" else
+        "image" if (primary_code == "5" and (sub_codes[0].startswith("5.6") if sub_codes else False)) else
+        "music" if (primary_code == "5" and (sub_codes[0].startswith("5.3") if sub_codes else False)) else
+        "general"
+    )
+
+    base_prompt = _build_final_prompt_by_classification(
+        idea=idea,
+        questions=questions,
+        answers=answers,
+        demand_classification=demand_classification,
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+    )
+    prompt_language = _extract_prompt_language_preference(questions, answers, profile)
+    rewritten = _rewrite_prompt_by_user_method(
+        prompt_text=base_prompt,
+        prompt_language=prompt_language,
+        mode_hint=mode_hint,
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+    )
+    stabilized = _stabilize_final_prompt_text(
+        prompt_text=rewritten,
+        primary_code=primary_code,
+        sub_code=(sub_codes[0] if sub_codes else ""),
+        prompt_language=prompt_language,
+        is_video_mode=(mode_hint == "video"),
+        is_music_mode=(mode_hint == "music"),
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+    )
+    if _looks_like_refusal_text(stabilized):
+        return _natural_prompt_fallback(stabilized, prompt_language)
+    return _strip_code_fence(stabilized)
 
 
 def _stub_questions(
@@ -6480,11 +7087,14 @@ def _synthesize_coding_solution_brief(
     custom_model: Optional[str] = None,
 ) -> Dict[str, object]:
     fallback = _fallback_coding_solution_brief(idea, fields, questions, answers)
-    if not _has_valid_key(custom_api_key):
+    resolved_api_key = custom_api_key if _has_valid_key(custom_api_key) else settings.openai_api_key
+    resolved_base_url = custom_base_url if _has_valid_key(custom_api_key) else "https://api.openai.com/v1"
+    resolved_model = custom_model or settings.qwen_model
+    if not _has_valid_key(resolved_api_key):
         return fallback
     try:
-        client = _client(custom_api_key, custom_base_url)
-        model = custom_model or settings.qwen_model
+        client = _client(resolved_api_key, resolved_base_url)
+        model = resolved_model
         qa_lines = _qa_summary_lines(questions, answers, limit=8)
         instruction = f"""
 你是資深產品架構師與技術 PM。
@@ -7013,11 +7623,14 @@ def _synthesize_dialogue_solution_brief(
 
 規則：
 1. 優先採用已確認資訊；若內容衝突，以「使用者最新且最明確的要求」為準。
-2. 方案必須遵循 Role → Task → Context → Constraints → Output Format 的邏輯。
-3. 把模糊需求轉成可執行策略：先釐清目標，再補上下文，最後給可落地規則與成功標準。
-4. 若資訊不足可補保守假設，寫入 assumptions，不得輸出占位語。
-5. response_strategy 3-5 條；content_focus_points 3-5 條；success_checks 3 條；non_goals 3 條。
-6. 僅輸出 JSON，不要其他文字。
+2. 方案必須遵循 Role → Task → Context → Constraints → Output Format（RTFC）邏輯。
+3. 角色、任務、上下文、限制、輸出格式都要具體，不能空泛。
+4. 把模糊需求轉成可執行策略：先釐清目標，再補上下文，最後給可落地規則與成功標準。
+5. 對複雜任務要含分步推理流程（step-by-step），並提供至少一個可複用範例格式。
+6. 需可評估：成功標準要可檢查，並包含清晰度、完整度、可執行性、約束性、可重複性。
+7. 若資訊不足可補保守假設，寫入 assumptions，不得輸出占位語。
+8. response_strategy 3-5 條；content_focus_points 3-5 條；success_checks 3 條；non_goals 3 條。
+9. 僅輸出 JSON，不要其他文字。
 
 [原始需求]
 {_core_idea_from_idea(idea)}
@@ -7466,23 +8079,20 @@ def _build_coding_solution_prompt(
     assumption_sentence = "；".join(assumptions)
 
     paragraph_1 = (
-        f"你是{role}。請針對「{target_users}」設計並落地一個可上線的第一版產品，"
-        f"產品定位是{positioning.strip('。')}，核心價值是{core_value.strip('。')}。"
+        f"你是專門為程式開發 AI 撰寫高品質提示詞的{role}。請把以下需求轉成可直接開工的工程任務，"
+        f"不要只重述想法，而是要主動收斂成能落地的解決方案：這個產品的定位是{positioning.strip('。')}，"
+        f"主要服務{target_users}，核心價值是{core_value.strip('。')}。"
     )
     paragraph_2 = (
-        f"你不是需求轉述器，而是解決方案設計者。"
-        f"先把產品想像轉成可實作架構，再交付可執行方案：MVP 必須包含 {feature_sentence}。"
-        f"核心使用流程是：{core_flow.strip('。')}。"
-        f"技術實作以 {tech_solution.strip('。')} 為主，並確保資料結構、API 契約、頁面流程、測試案例與部署步驟可直接執行。"
+        f"第一版請以「{core_flow.strip('。')}」作為主流程，MVP 先完成 {feature_sentence}，並採用{tech_solution.strip('。')}。"
+        f"交付時要一次給出可執行的系統架構、資料模型、API 契約、頁面流程、關鍵程式碼、測試案例與部署步驟，"
+        f"實作順序建議依 {plan_sentence} 推進，暫不納入 {non_goal_sentence}。"
     )
     paragraph_3 = (
-        f"實作順序建議為：{plan_sentence}。"
-        f"第一版不做：{non_goal_sentence}。"
-        f"驗收以以下標準判定：{acceptance_sentence}。"
-        f"方案理由：{rationale.strip('。')}。"
-        f"回覆語言使用 {prompt_language}；先給結論，再補必要說明；資訊不足時先列待確認項目，不硬猜。"
-        f"{(' 補充假設：' + assumption_sentence + '。') if assumption_sentence else ''}"
-        f"建議流程是：{execution_focus.strip('。')}；{method_rule.strip('。')}。"
+        f"請以 {acceptance_sentence} 作為驗收標準，整體方案需符合「{rationale.strip('。')}」，並重視可維護性、模組化、錯誤處理與後續擴充。"
+        f"{(' 你可以先採用以下合理假設再開工：' + assumption_sentence + '。') if assumption_sentence else ''}"
+        f"回覆語言請使用{prompt_language}，先給結論再補必要說明；若資訊不足，先列出待確認項目再提供保守可行方案。"
+        f"另外請自然融入這兩條工作方法：{execution_focus.strip('。')}；{method_rule.strip('。')}。"
     )
     return "\n\n".join([paragraph_1.strip(), paragraph_2.strip(), paragraph_3.strip()]).strip()
 
@@ -8686,7 +9296,8 @@ def _build_final_prompt_by_classification(
             image_mode = _is_image_ai_type(selected_ai_types) or _is_image_mode_from_idea(idea) or image_question_mode
         if not music_mode:
             music_mode = _is_music_ai_type(selected_ai_types) or _is_music_mode_from_idea(idea) or music_question_mode
-        coding_mode = coding_mode or _is_coding_ai_type(selected_ai_types) or _is_coding_mode_from_idea(idea)
+        if not coding_mode:
+            coding_mode = _is_coding_ai_type(selected_ai_types) or _is_coding_mode_from_idea(idea)
         dialogue_mode = dialogue_mode or _is_dialogue_ai_type(selected_ai_types) or _is_dialogue_mode_from_idea(idea)
 
         # Resolve cross-trigger when the request text contains mixed keywords:
@@ -8719,7 +9330,7 @@ def _build_final_prompt_by_classification(
         sub_name = str(category.get("subs", {}).get(key_sub) or "需求釐清")
 
     fields = _apply_prompt_field_defaults(fields, primary_code, key_sub)
-    coding_mode = primary_code == "9"
+    coding_mode = coding_mode or primary_code == "9"
     dialogue_mode = dialogue_mode or primary_code == "10"
     if not dialogue_mode:
         fields["role"] = _default_role_for_classification(primary_code, key_sub)
@@ -8736,7 +9347,7 @@ def _build_final_prompt_by_classification(
     dialogue_research_workflow: List[str] = []
     dialogue_output_template = ""
     dialogue_persona_pref = ""
-    if primary_code == "9":
+    if primary_code == "9" and coding_mode:
         fields, auto_assumptions = _augment_coding_prompt_fields(
             fields=fields,
             idea=idea,
@@ -9739,6 +10350,8 @@ def _normalize_prompt_language(value: str) -> str:
     text = str(value or "").strip().lower()
     if not text:
         return "繁體中文"
+    if text in {"未提供", "unknown", "n/a", "none", "null", "tbd", "待確認"}:
+        return "繁體中文"
     mapping = [
         ("英式英文", ["英式", "british", "uk english"]),
         ("美式英文", ["美式", "american", "us english"]),
@@ -9859,6 +10472,16 @@ def _collapse_repeated_clauses(text: str) -> str:
     raw = str(text or "").strip()
     if not raw:
         return raw
+
+    def _canonical_clause(value: str) -> str:
+        clause = str(value or "").strip()
+        if not clause:
+            return ""
+        clause = re.sub(r"^(回答時請|回覆時請|請|並依序|依序|另外請遵守|整體目標是讓|你的任務是)\s*", "", clause)
+        clause = re.sub(r"\s+", "", clause)
+        clause = re.sub(r"[，,；;。！？!?、:：\-\[\]\(\)【】\"'`]", "", clause)
+        return clause.lower()
+
     seen = set()
     paragraph_outputs: List[str] = []
     paragraphs = [p.strip() for p in re.split(r"\n{2,}", raw) if p.strip()]
@@ -9870,7 +10493,12 @@ def _collapse_repeated_clauses(text: str) -> str:
             punct = segments[idx + 1] if idx + 1 < len(segments) else ""
             if not clause:
                 continue
-            dedupe_key = re.sub(r"[\s，,；;。！？!?、:：\-\[\]\(\)【】]", "", clause).lower()
+            lowered = clause.lower()
+            if "最終輸出語言使用未提供" in clause or "回覆語言使用未提供" in clause:
+                continue
+            if lowered in {"未提供", "unknown", "n/a", "none", "null", "tbd", "待確認"}:
+                continue
+            dedupe_key = _canonical_clause(clause)
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
@@ -9882,6 +10510,66 @@ def _collapse_repeated_clauses(text: str) -> str:
     text = "\n\n".join(paragraph_outputs).strip()
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text
+
+
+def _looks_malformed_prompt_text(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    lowered = raw.lower()
+    hard_bad_patterns = [
+        "最終輸出語言使用未提供",
+        "回覆語言使用未提供",
+        "並依序回答時請",
+        "並依序回覆時請",
+    ]
+    if any(pattern in raw for pattern in hard_bad_patterns):
+        return True
+    if "回答時請" in raw and raw.count("回答時請") >= 3:
+        return True
+    if "回覆時請" in raw and raw.count("回覆時請") >= 3:
+        return True
+    if "整體目標是讓整體目標是讓" in raw:
+        return True
+    if any(token in lowered for token in ["未提供；並依序", "unknown; and then"]):
+        return True
+    return False
+
+
+def _normalize_language_rules_in_text(text: str, prompt_language: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return raw
+    target_language = _normalize_prompt_language(prompt_language)
+
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", raw) if p.strip()]
+    if not paragraphs:
+        return raw
+
+    cleaned_paragraphs: List[str] = []
+    lang_rule_pattern = re.compile(r"(最終輸出語言使用|回覆語言使用)\s*[^；;。！？!\n]+")
+    for para in paragraphs:
+        cleaned = lang_rule_pattern.sub("", para)
+        cleaned = re.sub(r"[；;，,]\s*[；;，,]+", "；", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip("；;，, ")
+        cleaned_paragraphs.append(cleaned.strip())
+
+    cleaned_paragraphs = [p for p in cleaned_paragraphs if p]
+    if not cleaned_paragraphs:
+        cleaned_paragraphs = [raw]
+
+    lang_sentence = (
+        f"Final output language must be {target_language}."
+        if _is_english_language(prompt_language)
+        else f"最終輸出語言使用{target_language}。"
+    )
+
+    if len(cleaned_paragraphs) >= 2:
+        cleaned_paragraphs[1] = f"{cleaned_paragraphs[1].rstrip('。.!?！？；;，,')}；{lang_sentence}".strip()
+    else:
+        cleaned_paragraphs.append(lang_sentence)
+
+    return "\n\n".join(cleaned_paragraphs).strip()
 
 
 def _contains_end_user_identity_role(role_text: str) -> bool:
@@ -10022,6 +10710,8 @@ def _stabilize_final_prompt_text(
     text = _strip_code_fence(prompt_text)
     if not text:
         return text
+    if _looks_malformed_prompt_text(text):
+        return _natural_prompt_fallback(text, prompt_language)
     if _looks_like_refusal_text(text):
         return _natural_prompt_fallback(prompt_text, prompt_language)
     if is_video_mode:
@@ -10045,9 +10735,12 @@ def _stabilize_final_prompt_text(
 
     text = _humanize_text(text)
     text = _collapse_repeated_clauses(text)
+    text = _normalize_language_rules_in_text(text, prompt_language)
     text = _normalize_role_sentence(text, primary_code, sub_code, prompt_language)
     text = _remove_hard_placeholder_sentences(text, primary_code, sub_code, prompt_language)
     text = _ensure_three_paragraphs(text)
+    if _looks_malformed_prompt_text(text):
+        return _natural_prompt_fallback(text, prompt_language)
     if _looks_like_refusal_text(text):
         return _natural_prompt_fallback(prompt_text, prompt_language)
     return text.strip()
@@ -10113,33 +10806,126 @@ def _natural_prompt_fallback(prompt_text: str, prompt_language: str) -> str:
     success_bits: List[str] = []
     other_bits: List[str] = []
 
+    def _strip_language_rule_fragments(text: str) -> str:
+        value = str(text or "").strip()
+        if not value:
+            return ""
+        parts = [seg.strip() for seg in re.split(r"[；;。]", value) if seg and seg.strip()]
+        kept_parts: List[str] = []
+        for part in parts:
+            lowered = part.lower()
+            if "最終輸出語言使用" in part or "回覆語言使用" in part:
+                continue
+            if lowered in {"未提供", "unknown", "n/a", "none", "null", "tbd", "待確認"}:
+                continue
+            kept_parts.append(part)
+        return "；".join(kept_parts).strip()
+
+    def _cleanup_behavior_clause(text_value: str) -> str:
+        clause = str(text_value or "").strip()
+        if not clause:
+            return ""
+        clause = re.sub(r"(最終輸出語言使用|回覆語言使用)\s*[^；;。！？!\n]+", "", clause, flags=re.IGNORECASE)
+        clause = re.sub(r"^(回答時請|回覆時請|請|並依序|依序|另外請遵守)\s*", "", clause)
+        clause = re.sub(r"\s{2,}", " ", clause).strip(" ，,。；;")
+        lowered = clause.lower()
+        if not clause or lowered in {"未提供", "unknown", "n/a", "none", "null", "tbd", "待確認"}:
+            return ""
+        return clause
+
+    def _extract_role_and_mission(raw_text: str) -> tuple[str, str]:
+        raw = str(raw_text or "").strip()
+        if not raw:
+            return "", ""
+
+        zh_match = re.search(r"你是([^，,。；;\n]+)", raw)
+        role = zh_match.group(1).strip() if zh_match else ""
+
+        mission = ""
+        for marker in ["你的任務是", "任務是", "目標是", "核心目標是"]:
+            if marker in raw:
+                mission = raw.split(marker, 1)[1].strip(" ，,。；;\n")
+                break
+        if mission.startswith("整體目標是讓"):
+            mission = mission[len("整體目標是讓") :].strip(" ，,。；;\n")
+        if mission.startswith("使用者"):
+            mission = f"讓{mission}"
+
+        return role, mission
+
+    def _split_clauses(raw_text: str) -> List[str]:
+        raw = str(raw_text or "").strip()
+        if not raw:
+            return []
+        parts = re.split(r"[；;。]\s*|\n+", raw)
+        clauses: List[str] = []
+        for part in parts:
+            clause = str(part or "").strip(" ，,。；;\t\r\n")
+            if not clause:
+                continue
+            clauses.append(clause)
+        return clauses
+
+    def _canonical_clause(text_value: str) -> str:
+        text_local = str(text_value or "").strip()
+        text_local = re.sub(r"^(並依序|並且|以及|接著|然後|再|最後)\s*", "", text_local)
+        text_local = re.sub(r"^(回答時請|回覆時請|請)\s*", "", text_local)
+        text_local = re.sub(r"\s+", "", text_local)
+        text_local = re.sub(r"[，,。；;：:、!！?？\"'`（）()【】\[\]]", "", text_local)
+        return text_local.lower()
+
     for ln in cleaned:
-        lower = ln.lower()
-        if "你是" in ln or "角色" in ln:
-            role_bits.append(ln)
-        elif any(token in ln for token in ["先", "再", "最後", "依序", "步驟", "流程"]):
-            flow_bits.append(ln)
-        elif any(token in ln for token in ["任務", "目標", "交付", "輸出"]):
-            goal_bits.append(ln)
-        elif any(token in ln for token in ["提供", "完成", "建立", "產出", "協助", "整理", "撰寫"]):
-            goal_bits.append(ln)
-        elif any(token in ln for token in ["限制", "規則", "語氣", "語言", "糾錯", "待確認"]):
-            rule_bits.append(ln)
-        elif any(token in ln for token in ["成功", "驗收", "完成標準"]):
-            success_bits.append(ln)
-        elif any(token in ln for token in ["使用者", "理解", "學會", "達成", "掌握"]):
-            success_bits.append(ln)
-        elif not any(token in lower for token in ["任務定位", "輸入資料", "ai 自動", "硬性要求", "自動補充假設"]):
-            other_bits.append(ln)
+        role_candidate, mission_candidate = _extract_role_and_mission(ln)
+        if role_candidate:
+            role_bits.append(role_candidate)
+        if mission_candidate:
+            goal_bits.append(mission_candidate)
+
+        stripped_line = _strip_language_rule_fragments(ln)
+        for clause in _split_clauses(stripped_line):
+            lower = clause.lower()
+            if not clause:
+                continue
+            if any(token in lower for token in ["未提供", "unknown", "n/a", "none", "null", "tbd", "待確認"]):
+                continue
+            if "你是" in clause or "you are" in lower:
+                continue
+            if clause.startswith("整體目標是讓"):
+                success_bits.append(clause[len("整體目標是讓") :].strip(" ，,。；;"))
+                continue
+
+            is_flow = any(token in clause for token in ["先", "再", "最後", "依序", "步驟", "流程"])
+            is_rule = any(token in clause for token in ["回答時", "回覆時", "語氣", "語言", "規則", "簡潔", "可執行", "糾錯", "限制"])
+            is_goal = any(token in clause for token in ["任務", "目標", "交付", "輸出", "完成", "建立", "產出", "協助"])
+            is_success = any(token in clause for token in ["成功", "驗收", "完成標準", "符合", "達成", "使用者"])
+
+            if is_rule:
+                cleaned_clause = _cleanup_behavior_clause(clause)
+                if cleaned_clause:
+                    rule_bits.append(cleaned_clause)
+            elif is_flow:
+                cleaned_clause = _cleanup_behavior_clause(clause)
+                if cleaned_clause:
+                    flow_bits.append(cleaned_clause)
+            elif is_success and not is_goal:
+                success_bits.append(clause)
+            elif is_goal:
+                goal_bits.append(clause)
+            elif "你是" not in clause and "角色" not in clause:
+                other_bits.append(clause)
 
     def _dedupe(items: List[str], limit: int) -> List[str]:
         out: List[str] = []
+        seen_keys = set()
         for item in items:
             item = item.strip("；;，,。 ")
             if not item:
                 continue
-            if item not in out:
-                out.append(item)
+            key = _canonical_clause(item)
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            out.append(item)
             if len(out) >= limit:
                 break
         return out
@@ -10156,17 +10942,33 @@ def _natural_prompt_fallback(prompt_text: str, prompt_language: str) -> str:
     role_sentence = _render_role_intro(role_candidate, prompt_language)
 
     mission = "；".join(goal_bits or other_bits[:2] or ["協助使用者完成目標"])
+    mission = re.sub(r"^整體目標是讓", "", mission).strip(" ，,。；;")
+    mission = _collapse_repeated_clauses(mission)
     connector = ", and your task is " if _is_english_language(prompt_language) else "，你的任務是"
     end_mark = "." if _is_english_language(prompt_language) else "。"
     paragraph_1 = f"{role_sentence}{connector}{mission}{end_mark}"
 
-    rules = "；".join(rule_bits or ["保持清楚、簡潔且可執行"])
-    flows = "；".join(flow_bits or ["先釐清需求，再給結論，最後補下一步"])
+    clean_rule_bits = [_cleanup_behavior_clause(_strip_language_rule_fragments(item)) for item in rule_bits]
+    clean_rule_bits = [item for item in clean_rule_bits if item]
+    rules = "；".join(clean_rule_bits or ["保持清楚、簡潔且可執行"])
+    rules = _collapse_repeated_clauses(rules)
+    clean_flow_bits = [_cleanup_behavior_clause(item) for item in flow_bits]
+    clean_flow_bits = [item for item in clean_flow_bits if item]
+    flows = "；".join(clean_flow_bits or ["先釐清需求，再給結論，最後補下一步"])
+    flows = _collapse_repeated_clauses(flows)
+    flows = _cleanup_behavior_clause(flows)
+    if not flows or _canonical_clause(flows) == _canonical_clause(rules):
+        flows = "先釐清需求，再給結論，最後補下一步"
     lang_rule = f"最終輸出語言使用{_normalize_prompt_language(prompt_language)}"
-    paragraph_2 = f"回答時請{rules}；{lang_rule}；並依序{flows}。"
+    paragraph_2 = f"回答時請{rules}。並依序{flows}；{lang_rule}。"
 
     success = "；".join(success_bits or ["最終回覆需符合任務目標與限制條件"])
+    success = _collapse_repeated_clauses(success)
     success = success.strip()
+    success_key = _canonical_clause(success)
+    mission_key = _canonical_clause(mission)
+    if success_key and mission_key and (success_key == mission_key or success_key in mission_key or mission_key in success_key):
+        success = "最終回覆可直接執行並符合任務目標與限制條件"
     if success.startswith("使用者"):
         paragraph_3 = f"整體目標是讓{success}。"
     else:
@@ -10243,3 +11045,4 @@ def _inject_final_prompt_section(report: str, final_prompt_text: str) -> str:
     if re.search(r"##\s*6\.", raw):
         return re.sub(r"##\s*6\.[\s\S]*$", section, raw).strip()
     return f"{raw}\n\n{section}\n"
+

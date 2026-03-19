@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     qwen_model: str = "qwen-max"
     openai_api_key: str | None = None
     db_path: str = "requirement_compass.db"
+    cors_allow_origins: str = "http://localhost:5175,http://127.0.0.1:5175"
+    cors_allow_origin_regex: str = r"^https:\/\/.*\.vercel\.app$"
 
     class Config:
         env_file = ".env"

@@ -128,6 +128,13 @@ export const api = {
       mode_hint: modeHint,
       custom_api: customApi
     }),
+  generateFinalPrompt: (id, customApi) => {
+    if (!id || typeof id !== 'string') return Promise.reject(new Error('sessionId 缺失'))
+    return client(LLM_TIMEOUT_MS).post('/generate-final-prompt', {
+      session_id: id,
+      custom_api: customApi
+    })
+  },
   generatePdf: (id) => client().post('/generate-pdf', { session_id: id }),
   downloadPdf: (id) => {
     if (!id || typeof id !== 'string') return Promise.reject(new Error('sessionId 缺失'))

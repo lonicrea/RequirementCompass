@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
-import { Card, Button, Typography, Space, message } from 'antd'
+import { App, Card, Button, Typography, Space } from 'antd'
 import { api, decodeApiBaseFromQuery, saveApiBase } from '../../../lib/api'
 import { marked } from 'marked'
 
@@ -16,6 +16,7 @@ const stripOuterCodeFence = (text) => {
 }
 
 export default function ResultsPage() {
+  const { message } = App.useApp()
   const { sessionId } = useParams()
   const sessionIdText = String(sessionId || '')
   const search = useSearchParams()

@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
-import { Card, Typography, Timeline, Collapse, Button, message } from 'antd'
+import { App, Card, Typography, Timeline, Collapse, Button } from 'antd'
 import { api, decodeApiBaseFromQuery, saveApiBase } from '../../../lib/api'
 import { marked } from 'marked'
 
 const { Title, Paragraph } = Typography
 
 export default function OverviewPage() {
+  const { message } = App.useApp()
   const { sessionId } = useParams()
   const sessionIdText = String(sessionId || '')
   const search = useSearchParams()

@@ -81,6 +81,16 @@ class NaturalizePromptResponse(BaseModel):
     prompt: str
 
 
+class GenerateFinalPromptRequest(BaseModel):
+    session_id: str
+    custom_api: Optional[CustomAPIConfig] = None
+
+
+class GenerateFinalPromptResponse(BaseModel):
+    session_id: str
+    final_prompt: str
+
+
 class GeneratePdfRequest(BaseModel):
     session_id: str
 

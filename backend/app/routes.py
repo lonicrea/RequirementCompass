@@ -15,13 +15,20 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import SessionLocal
-from app.llm import classify_demand, generate_questions, naturalize_prompt_to_paragraphs, process_answers_to_doc
+from app.llm import (
+    classify_demand,
+    generate_final_prompt_strict,
+    generate_questions,
+    naturalize_prompt_to_paragraphs,
+)
 from app.models import Round, Session as SessionModel
 from app.schemas import (
     AppendQuestionsRequest,
     AppendQuestionsResponse,
     ContinueFeedbackRequest,
     ContinueFeedbackResponse,
+    GenerateFinalPromptRequest,
+    GenerateFinalPromptResponse,
     GeneratePdfRequest,
     GenerateQuestionsRequest,
     GenerateQuestionsResponse,
@@ -155,7 +162,7 @@ def api_submit_answers(payload: SubmitAnswersRequest, db: Session = Depends(get_
         # 報告生成時使用「資料庫歷史問答 + 本輪問答」完整上下文補欄位，避免輸出空白。
         doc_questions = historical_questions + questions
 
-        report = process_answers_to_doc(
+        report = generate_final_prompt_strict(
             idea=sm.idea,
             questions=doc_questions,
             answers=all_answers,
@@ -163,6 +170,7 @@ def api_submit_answers(payload: SubmitAnswersRequest, db: Session = Depends(get_
             custom_base_url=payload.custom_api.base_url if payload.custom_api else None,
             custom_model=payload.custom_api.model if payload.custom_api else None,
         )
+        report = _strip_text_code_fence(report)
 
         existing_reports: List[str] = json.loads(sm.reports)
         existing_reports.append(report)
@@ -291,6 +299,65 @@ def api_naturalize_prompt(payload: NaturalizePromptRequest):
             custom_model=payload.custom_api.model if payload.custom_api else None,
         )
         return {"prompt": natural}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/generate-final-prompt", response_model=GenerateFinalPromptResponse)
+def api_generate_final_prompt(payload: GenerateFinalPromptRequest, db: Session = Depends(get_db)):
+    try:
+        limit_resp = _token_limit_response(db)
+        if limit_resp:
+            return limit_resp
+
+        if not payload.session_id:
+            return JSONResponse({"error": "會話 ID 不能為空"}, status_code=400)
+
+        sm = db.get(SessionModel, payload.session_id)
+        if not sm:
+            return JSONResponse({"error": "無效的會話 ID"}, status_code=400)
+
+        questions = json.loads(sm.questions or "[]")
+        answers = json.loads(sm.answers or "[]")
+        if not answers:
+            return JSONResponse({"error": "尚未有可用回答，請先提交答案"}, status_code=400)
+
+        historical_questions: List[dict] = []
+        previous_rounds = (
+            db.query(Round)
+            .filter(Round.session_id == sm.id)
+            .order_by(Round.round_number.asc())
+            .all()
+        )
+        for record in previous_rounds:
+            try:
+                round_questions = json.loads(record.questions)
+                round_answers = json.loads(record.answers)
+            except Exception:
+                continue
+            aligned_count = min(len(round_questions or []), len(round_answers or []))
+            if aligned_count > 0:
+                historical_questions.extend((round_questions or [])[:aligned_count])
+
+        doc_questions = historical_questions + questions
+        prompt_text = generate_final_prompt_strict(
+            idea=sm.idea,
+            questions=doc_questions,
+            answers=answers,
+            custom_api_key=payload.custom_api.api_key if payload.custom_api else None,
+            custom_base_url=payload.custom_api.base_url if payload.custom_api else None,
+            custom_model=payload.custom_api.model if payload.custom_api else None,
+        )
+        clean_prompt = _strip_text_code_fence(prompt_text)
+
+        existing_reports: List[str] = json.loads(sm.reports or "[]")
+        existing_reports.append(f"```text\n{clean_prompt}\n```")
+        sm.reports = json.dumps(existing_reports, ensure_ascii=False)
+        db.add(sm)
+        db.commit()
+
+        add_token_usage(db, tokens=_estimate_tokens(sm.idea, doc_questions, answers))
+        return {"session_id": sm.id, "final_prompt": clean_prompt}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -427,17 +494,45 @@ def _token_limit_response(db: Session):
 
 
 def _merge_questions_with_unique_ids(existing_questions: list, new_questions: list) -> list:
-    # 保持舊題目 ID 穩定，新增題目以連續編號補上。
+    # 保持舊題目 ID 穩定，新增題目時依文本去重後再補連續編號。
     merged = list(existing_questions or [])
-    start = len(merged)
-    for idx, q in enumerate(new_questions or [], start=1):
+    seen = {
+        _normalize_question_text(item.get("text", ""))
+        for item in merged
+        if isinstance(item, dict)
+    }
+
+    for q in new_questions or []:
+        text = str((q or {}).get("text", "")).strip()
+        if not text:
+            continue
+        key = _normalize_question_text(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
         merged.append({
-            "id": f"q{start + idx}",
-            "text": q.get("text", ""),
-            "type": q.get("type", "narrative"),
-            "options": q.get("options"),
+            "id": f"q{len(merged) + 1}",
+            "text": text,
+            "type": (q or {}).get("type", "narrative"),
+            "options": (q or {}).get("options"),
         })
     return merged
+
+
+def _normalize_question_text(text: str) -> str:
+    normalized = str(text or "").strip().lower()
+    normalized = re.sub(r"^\s*(?:第\s*\d+\s*題|q\s*\d+|\d+\s*[\.、．\)]|[（(]?\d+[）)]?)\s*", "", normalized)
+    normalized = re.sub(r"\s+", "", normalized)
+    normalized = re.sub(r"[，。！？、,.!?;；:：「」『』（）()\\-—_]", "", normalized)
+    return normalized
+
+
+def _strip_text_code_fence(text: str) -> str:
+    raw = str(text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[a-zA-Z0-9_-]*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+    return raw.strip()
 
 
 def _build_enriched_idea(

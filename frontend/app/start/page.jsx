@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Button, Card, Input, Radio, Select, Space, Typography, message } from 'antd'
+import { App, Button, Card, Input, Radio, Select, Space, Typography } from 'antd'
 import { api } from '../../lib/api'
 
 const { Title, Paragraph } = Typography
@@ -16,6 +16,7 @@ const AI_TYPE_OPTIONS = [
 ]
 
 export default function StartPage() {
+  const { message } = App.useApp()
   const [idea, setIdea] = useState('')
   const [selectedAiType, setSelectedAiType] = useState('')
   const [userIdentity, setUserIdentity] = useState('一般使用者')

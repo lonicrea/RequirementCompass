@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Typography, message } from 'antd'
+import { App, Typography } from 'antd'
 import { decodeApiBaseFromQuery, saveApiBase } from '../lib/api'
 
 const { Title, Paragraph } = Typography
@@ -55,6 +55,7 @@ Negative: blurry, distorted, deformed penguin, low resolution, flickering, unnat
 ]
 
 export default function HomePage() {
+  const { message } = App.useApp()
   const router = useRouter()
 
   useEffect(() => {
