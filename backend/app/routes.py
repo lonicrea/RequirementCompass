@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import SessionLocal
 from app.llm import (
+    _qa_topic_key,
     classify_demand,
     generate_final_prompt_strict,
     generate_questions,
@@ -501,15 +502,25 @@ def _merge_questions_with_unique_ids(existing_questions: list, new_questions: li
         for item in merged
         if isinstance(item, dict)
     }
+    seen_topics = {
+        _qa_topic_key(str(item.get("text", "")))
+        for item in merged
+        if isinstance(item, dict)
+    }
 
     for q in new_questions or []:
         text = str((q or {}).get("text", "")).strip()
         if not text:
             continue
         key = _normalize_question_text(text)
+        topic = _qa_topic_key(text)
         if not key or key in seen:
             continue
+        if topic != "generic" and topic in seen_topics:
+            continue
         seen.add(key)
+        if topic != "generic":
+            seen_topics.add(topic)
         merged.append({
             "id": f"q{len(merged) + 1}",
             "text": text,

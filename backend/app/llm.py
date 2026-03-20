@@ -341,11 +341,15 @@ def classify_demand(
     core_idea = _core_idea_from_idea(idea)
     selected_ai_types = _extract_selected_ai_types(idea)
     fallback = _fallback_demand_classification(core_idea, selected_ai_types=selected_ai_types)
-    if not _has_valid_key(custom_api_key):
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    if not attempts:
         return fallback
-
-    client = _client(custom_api_key, custom_base_url)
-    model = custom_model or settings.qwen_model
 
     prompt = f"""
 你是需求分類器，請把用戶需求分類到以下體系。
@@ -369,52 +373,56 @@ def classify_demand(
   "reasoning": "不超過 80 字"
 }}
 """
-
-    def _request(with_response_format: bool):
-        kwargs = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "你是嚴格的需求分類器，只輸出合法 JSON。"},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.1,
-            "timeout": 15,
-        }
-        if with_response_format:
-            kwargs["response_format"] = {"type": "json_object"}
-        return client.chat.completions.create(**kwargs)
-
-    try:
+    for api_key, base_url, model in attempts:
         try:
-            completion = _request(with_response_format=True)
-        except Exception:
-            completion = _request(with_response_format=False)
-        content = completion.choices[0].message.content or ""
-        data = _extract_json_payload(content)
-        if isinstance(data, dict):
-            primary_code = str(data.get("primary_code", "")).strip()
-            if primary_code not in DEMAND_TAXONOMY:
-                return fallback
-            confidence = data.get("confidence", 0.6)
+            client = _client(api_key, base_url)
+
+            def _request(with_response_format: bool):
+                kwargs = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": "你是嚴格的需求分類器，只輸出合法 JSON。"},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.1,
+                    "timeout": 15,
+                }
+                if with_response_format:
+                    kwargs["response_format"] = {"type": "json_object"}
+                return client.chat.completions.create(**kwargs)
+
             try:
-                confidence = float(confidence)
+                completion = _request(with_response_format=True)
             except Exception:
-                confidence = 0.6
-            confidence = max(0.0, min(1.0, confidence))
-            sub_codes = data.get("subcategory_codes") or []
-            if isinstance(sub_codes, str):
-                sub_codes = [sub_codes]
-            subcategories = _normalize_subcategories(primary_code, sub_codes)
-            return {
-                "primary_code": primary_code,
-                "primary_name": DEMAND_TAXONOMY[primary_code]["name"],
-                "subcategories": subcategories,
-                "confidence": confidence,
-                "reasoning": str(data.get("reasoning") or "根據需求語義進行分類。").strip()[:120],
-                "method": "llm_classifier",
-            }
-    except Exception:
-        logger.exception("classify_demand fallback")
+                completion = _request(with_response_format=False)
+
+            content = completion.choices[0].message.content or ""
+            data = _extract_json_payload(content)
+            if isinstance(data, dict):
+                primary_code = str(data.get("primary_code", "")).strip()
+                if primary_code not in DEMAND_TAXONOMY:
+                    continue
+                confidence = data.get("confidence", 0.6)
+                try:
+                    confidence = float(confidence)
+                except Exception:
+                    confidence = 0.6
+                confidence = max(0.0, min(1.0, confidence))
+                sub_codes = data.get("subcategory_codes") or []
+                if isinstance(sub_codes, str):
+                    sub_codes = [sub_codes]
+                subcategories = _normalize_subcategories(primary_code, sub_codes)
+                return {
+                    "primary_code": primary_code,
+                    "primary_name": DEMAND_TAXONOMY[primary_code]["name"],
+                    "subcategories": subcategories,
+                    "confidence": confidence,
+                    "reasoning": str(data.get("reasoning") or "根據需求語義進行分類。").strip()[:120],
+                    "method": "llm_classifier",
+                }
+        except Exception:
+            logger.exception("classify_demand attempt failed")
+            continue
 
     return fallback
 
@@ -476,6 +484,54 @@ def _has_valid_key(custom_api_key: Optional[str]) -> bool:
         return False
     placeholder = "YOUR_OPENAI_API_KEY_HERE"
     return key.strip() != placeholder
+
+
+def _is_usable_api_key(value: Optional[str]) -> bool:
+    key = str(value or "").strip()
+    if not key:
+        return False
+    return key != "YOUR_OPENAI_API_KEY_HERE"
+
+
+def _default_model_for_api_key(api_key: str) -> str:
+    return "gpt-4o" if _looks_like_openai_key(api_key) else settings.qwen_model
+
+
+def _default_base_url_for_api_key(api_key: str) -> str:
+    return "https://api.openai.com/v1" if _looks_like_openai_key(api_key) else settings.qwen_base_url
+
+
+def _build_llm_attempts(
+    custom_api_key: Optional[str] = None,
+    custom_base_url: Optional[str] = None,
+    custom_model: Optional[str] = None,
+    include_openai_fallback: bool = True,
+    include_qwen_fallback: bool = True,
+) -> List[tuple[str, str, str]]:
+    attempts: List[tuple[str, str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def _add_attempt(raw_key: Optional[str], raw_base_url: Optional[str], raw_model: Optional[str]) -> None:
+        key = str(raw_key or "").strip()
+        if not _is_usable_api_key(key):
+            return
+        base = str(raw_base_url or "").strip() or _default_base_url_for_api_key(key)
+        model = str(raw_model or "").strip() or _default_model_for_api_key(key)
+        signature = (key, base, model)
+        if signature in seen:
+            return
+        seen.add(signature)
+        attempts.append(signature)
+
+    _add_attempt(custom_api_key, custom_base_url, custom_model)
+
+    if include_openai_fallback:
+        _add_attempt(settings.openai_api_key, "https://api.openai.com/v1", "gpt-4o")
+
+    if include_qwen_fallback:
+        _add_attempt(settings.qwen_api_key, settings.qwen_base_url, settings.qwen_model)
+
+    return attempts
 
 
 def _extract_profile_from_idea(idea: str) -> Dict[str, object]:
@@ -3719,61 +3775,61 @@ def _coding_dynamic_followup_candidates(
 
     candidates: List[dict] = []
     if not has_history:
-        # 第一輪先把產品價值與核心流程問清楚，避免一開始就進入實作細節。
-        add(candidates, "goal", f"你希望「{subject}」上線後，使用者第一個會明顯感受到的價值是什麼？")
-        add(candidates, "user", f"這個產品最核心的使用者是誰？他現在在什麼步驟最容易卡住？")
-        add(candidates, "moment", f"如果只看前 30 秒，你最希望使用者完成哪個關鍵動作？")
-        add(candidates, "scope", f"第一版你願意先做小一點：哪 3 件事一定做、哪 2 件事可以先不做？")
-        add(candidates, "success", "如果要你驗收第一版，你會看哪 1 到 2 個可觀察結果？")
-        add(candidates, "risk", "你最怕踩到哪種風險？（例如資料錯誤、速度太慢、流程中斷、上線回滾困難）")
-        add(candidates, "reference", "有沒有你想參考的產品或流程？你想保留哪個優點，避免哪個缺點？")
+        # 第一輪用產品語言深挖，不用表單語氣。
+        add(candidates, "goal", f"先對齊方向：你做「{subject}」最想解掉的那個痛點，具體是什麼？")
+        add(candidates, "user", f"誰最常會用到「{subject}」？他現在通常卡在哪一步？")
+        add(candidates, "moment", "假設新使用者只願意停留 30 秒，你希望他完成哪個動作就算成功？")
+        add(candidates, "scope", "如果第一版只能聚焦最核心功能，你想先做哪三件事？")
+        add(candidates, "success", "到你驗收時，看到哪兩個結果你會說「可以上線了」？")
+        add(candidates, "risk", "你現在最擔心哪種失敗情境？（流程卡住、資料錯、太慢、或回滾困難）")
+        add(candidates, "reference", "有沒有你心中做得不錯的參考產品？想借鏡哪一點、避開哪一點？")
 
     if any(token in lowered for token in ["學習", "教學", "課程", "教育"]):
         add(
             candidates,
             "edu_outcome",
-            "以學習平台來看，你最想先提升哪個結果：學習動機、完成率，還是學習成果？",
+            "站在學習產品角度，你最優先拉高的是學習動機、完成率，還是學習成果？",
             "choice",
             ["學習動機", "學習效率", "學習成果", "三者都重要，請你排序", "其他"],
         )
-        add(candidates, "edu_flow", "學生第一次進來時，你希望他先完成哪個學習任務，才能願意繼續用下去？")
+        add(candidates, "edu_flow", "學生第一次進來時，哪個任務做完後他最有可能繼續用？")
 
     if any(token in lowered for token in ["地圖", "map", "導航", "座標"]):
-        add(candidates, "map_detail", "使用者點開地圖點位時，第一屏最少要看到哪三種資訊？")
+        add(candidates, "map_detail", "使用者點開地圖點位後，第一屏你一定要他看到哪三種資訊？")
         add(
             candidates,
             "map_interaction",
-            "地圖互動你要先優化哪一種？",
+            "地圖互動你想先把哪一段體驗做到最好？",
             "choice",
             ["快速找點位", "探索故事脈絡", "篩選比較資料", "收藏與分享", "其他"],
         )
 
     if any(token in lowered for token in ["社群", "論壇", "交流", "貼文", "討論"]):
-        add(candidates, "community_flow", "在交流平台裡，你最看重哪條互動流程（發問、回答、回饋、收藏）？")
+        add(candidates, "community_flow", "在交流平台裡，你最想先打磨哪條互動路徑（發問、回答、回饋、收藏）？")
 
     if any(token in lowered for token in ["登入", "會員", "auth", "權限"]):
-        add(candidates, "roles", "第一版要分哪些角色？各角色最重要的一個操作是什麼？")
+        add(candidates, "roles", "第一版需要哪些角色？每個角色最關鍵的一個操作是什麼？")
 
     if any(token in lowered for token in ["報錯", "error", "exception", "bug", "失敗", "不能用"]):
-        add(candidates, "bug_step", "目前最常在哪一步出錯？請描述一次可重現流程。")
+        add(candidates, "bug_step", "目前最常在哪一步出錯？你可不可以描述一次可重現流程？")
         add(
             candidates,
             "bug_priority",
-            "你要先解哪類問題？",
+            "你想先處理哪一類問題，才能最快止血？",
             "choice",
             ["阻塞流程的錯誤", "資料不正確", "速度太慢", "穩定性與回滾風險", "其他"],
         )
 
     if ux_signal:
-        add(candidates, "ux_focus", "在體驗上你最在意哪件事：上手速度、資訊清楚，還是操作回饋？")
+        add(candidates, "ux_focus", "在體驗上你最在意的是上手速度、資訊清楚，還是操作回饋？")
 
     # 第二輪起補齊工程落地細節，讓「增加問題」持續深挖，不重複第一輪。
     if has_history or advanced_signal:
-        add(candidates, "io", "拿你最關鍵那條流程來看：使用者輸入什麼，系統中間怎麼處理，最後輸出什麼？")
-        add(candidates, "constraint", "在時程、部署、相依或預算上，有哪些硬限制一定不能踩？")
-        add(candidates, "data_model", "這個產品最核心的資料實體有哪些？（例如使用者、內容、任務、紀錄）")
-        add(candidates, "api_contract", "你希望前後端先定哪一個 API 契約，才能最快開始並行開發？")
-        add(candidates, "error_handling", "如果使用者輸入不完整或服務失敗，你希望系統怎麼回應才不會卡住流程？")
+        add(candidates, "io", "以你最關鍵的那條流程來看：使用者給什麼、系統做什麼、最後回給他什麼？")
+        add(candidates, "constraint", "時程、部署、相依或預算上，有沒有一定不能踩的線？")
+        add(candidates, "data_model", "這個產品的核心資料物件會是哪些？（例如使用者、內容、任務、紀錄）")
+        add(candidates, "api_contract", "前後端要並行的話，你想先定哪個 API，才能避免後面反覆返工？")
+        add(candidates, "error_handling", "若輸入不完整或服務失敗，你希望系統怎麼回應才不會讓使用者中斷？")
         add(
             candidates,
             "performance",
@@ -3781,14 +3837,14 @@ def _coding_dynamic_followup_candidates(
             "choice",
             ["主要操作 1 秒內回應", "主要操作 3 秒內回應", "先能用、效能後補", "不確定，請你建議"],
         )
-        add(candidates, "deployment", "第一版要部署在哪裡？（本機、Vercel/Render、雲服務或公司內網）")
-        add(candidates, "observability", "上線後你最想先看到哪種監控資訊？（錯誤率、延遲、使用量、轉換率）")
-        add(candidates, "test_strategy", "你希望第一版至少補哪些測試，才敢上線？")
-        add(candidates, "rollback", "如果上線出問題，你希望回滾策略怎麼設計才安全？")
-        add(candidates, "security", "有沒有一定要先做的安全底線？（登入、權限、資料保護、輸入驗證）")
+        add(candidates, "deployment", "第一版你打算部署在哪裡？（本機、Vercel/Render、雲服務或公司內網）")
+        add(candidates, "observability", "上線後你最想先盯哪個指標？（錯誤率、延遲、使用量、轉換率）")
+        add(candidates, "test_strategy", "哪幾種測試沒過，你就不會同意上線？")
+        add(candidates, "rollback", "如果上線後出事，你希望怎麼回滾才安全、可控？")
+        add(candidates, "security", "有哪些安全底線你希望第一版就做到？（登入、權限、資料保護、輸入驗證）")
         if advanced_signal:
-            add(candidates, "architecture", "你有偏好的架構方向嗎？若還沒定，也可以說你想優先保證哪個品質目標。")
-            add(candidates, "quality_gate", "工程品質你最在意哪一項？（效能、穩定、可維護、安全）")
+            add(candidates, "architecture", "你有偏好的架構方向嗎？若還沒定，先說你最想優先保證哪個品質目標。")
+            add(candidates, "quality_gate", "工程品質你最重視哪一項？（效能、穩定、可維護、安全）")
 
     return [
         {"text": item["text"], "type": item["type"], "options": item["options"]}
@@ -3808,17 +3864,16 @@ def _request_mode_dynamic_questions_with_llm(
     custom_base_url: Optional[str] = None,
     custom_model: Optional[str] = None,
 ) -> List[dict]:
-    has_custom = _has_valid_key(custom_api_key)
-    has_openai = _has_valid_key(settings.openai_api_key)
-    if max_questions <= 0 or (not has_custom and not has_openai):
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    if max_questions <= 0 or not attempts:
         return []
     try:
-        attempts: List[tuple[Optional[str], Optional[str], Optional[str]]] = []
-        if has_openai:
-            attempts.append((settings.openai_api_key, "https://api.openai.com/v1", "gpt-4o"))
-        if has_custom:
-            attempts.append((custom_api_key, custom_base_url, custom_model or settings.qwen_model))
-
         known_slots = [f"- {slot}: {value}" for slot, value in slot_values.items() if str(value or "").strip()]
         asked_questions = [f"- {str(item.get('text', '')).strip()}" for item in (existing_questions or []) if str(item.get("text", "")).strip()]
 
@@ -3826,11 +3881,11 @@ def _request_mode_dynamic_questions_with_llm(
         mode_extra_rules = ""
         if mode_label == "編程需求":
             style_rule = (
-                "7. 問句必須像資深工程顧問在討論產品：貼合上下文、單點深挖、避免模板清單。"
+                "7. 問句必須像資深工程顧問在討論產品：貼合上下文、深入但自然、避免模板清單。"
                 " 若使用者回答抽象，追問可觀察行為與可驗收結果。"
             )
             mode_extra_rules = (
-                "8. 你不是問卷機器；每次只追一個最關鍵缺口，優先處理高風險不確定性。\n"
+                "8. 本輪請產出 8~10 題，前半題聚焦產品想像與使用者價值，後半題才補工程落地關鍵。\n"
                 "9. 禁止固定句型輪播，不要出現『請描述』『請列出』這種表單語。\n"
                 "10. 盡量引用使用者原句中的關鍵名詞，讓問題看起來是延續對話，而不是換題。"
             )
@@ -3865,8 +3920,6 @@ def _request_mode_dynamic_questions_with_llm(
 ]
 """
         for api_key, base_url, model_name in attempts:
-            if not _has_valid_key(api_key):
-                continue
             try:
                 client = _client(api_key, base_url)
                 completion = client.chat.completions.create(
@@ -4151,18 +4204,17 @@ def _request_video_dynamic_questions_with_llm(
     custom_base_url: Optional[str] = None,
     custom_model: Optional[str] = None,
 ) -> List[dict]:
-    has_custom = _has_valid_key(custom_api_key)
-    has_openai = _has_valid_key(settings.openai_api_key)
-    if max_questions <= 0 or (not has_custom and not has_openai):
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    if max_questions <= 0 or not attempts:
         return []
 
     try:
-        attempts: List[tuple[Optional[str], Optional[str], Optional[str]]] = []
-        if has_openai:
-            attempts.append((settings.openai_api_key, "https://api.openai.com/v1", "gpt-4o"))
-        if has_custom:
-            attempts.append((custom_api_key, custom_base_url, custom_model or settings.qwen_model))
-
         known_slots = []
         for slot in VIDEO_SLOT_ORDER:
             value = str(slot_values.get(slot) or "").strip()
@@ -4207,8 +4259,6 @@ def _request_video_dynamic_questions_with_llm(
 """
 
         for api_key, base_url, model_name in attempts:
-            if not _has_valid_key(api_key):
-                continue
             try:
                 client = _client(api_key, base_url)
                 completion = client.chat.completions.create(
@@ -5512,12 +5562,16 @@ def generate_questions(
             custom_model=custom_model,
         )
 
-    # 若沒有有效金鑰，直接回傳本機 stub，避免建立客戶端失敗。
-    if not _has_valid_key(custom_api_key):
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    # 若沒有可用金鑰，直接回傳本機 stub。
+    if not attempts:
         return _style_and_deduplicate_questions(_stub_questions(idea, demand_classification=resolved_classification))
-
-    client = _client(custom_api_key, custom_base_url)
-    model = custom_model or settings.qwen_model
 
     qa_pairs = []
     if questions_list and answers_list:
@@ -5537,48 +5591,47 @@ def generate_questions(
         demand_classification=resolved_classification,
     )
 
-    def _request(with_response_format: bool):
-        kwargs = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "你是一位專業的需求訪談助手。"},
-                {
-                    "role": "user",
-                    "content": prompt + "\n只返回 JSON，不要輸出其他說明文字。"
-                },
-            ],
-            "temperature": 0.6,
-            "timeout": 20,
-        }
-        if with_response_format:
-            kwargs["response_format"] = {"type": "json_object"}
-        return client.chat.completions.create(**kwargs)
-
-    try:
-        completion = _request(with_response_format=True)
-    except Exception:
-        logger.exception("generate_questions json-mode failed, retry plain mode")
+    for api_key, base_url, model in attempts:
         try:
-            completion = _request(with_response_format=False)
-        except Exception:
-            logger.exception("generate_questions fallback")
-            return _style_and_deduplicate_questions(_stub_questions(idea, demand_classification=resolved_classification))
+            client = _client(api_key, base_url)
 
-    try:
-        content = completion.choices[0].message.content or ""
-        data = _extract_json_payload(content)
-        if isinstance(data, dict) and "questions" in data and isinstance(data["questions"], list):
-            questions = _normalize_questions(data["questions"], student_mode=False)
-            questions = _apply_classification_question_policy(questions, resolved_classification, idea=idea)
-            if questions:
-                return _style_and_deduplicate_questions(questions)
-        if isinstance(data, list):
-            questions = _normalize_questions(data, student_mode=False)
-            questions = _apply_classification_question_policy(questions, resolved_classification, idea=idea)
-            if questions:
-                return _style_and_deduplicate_questions(questions)
-    except Exception:
-        logger.exception("generate_questions parse fallback")
+            def _request(with_response_format: bool):
+                kwargs = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": "你是一位專業的需求訪談助手。"},
+                        {
+                            "role": "user",
+                            "content": prompt + "\n只返回 JSON，不要輸出其他說明文字。"
+                        },
+                    ],
+                    "temperature": 0.6,
+                    "timeout": 20,
+                }
+                if with_response_format:
+                    kwargs["response_format"] = {"type": "json_object"}
+                return client.chat.completions.create(**kwargs)
+
+            try:
+                completion = _request(with_response_format=True)
+            except Exception:
+                completion = _request(with_response_format=False)
+
+            content = completion.choices[0].message.content or ""
+            data = _extract_json_payload(content)
+            if isinstance(data, dict) and "questions" in data and isinstance(data["questions"], list):
+                questions = _normalize_questions(data["questions"], student_mode=False)
+                questions = _apply_classification_question_policy(questions, resolved_classification, idea=idea)
+                if questions:
+                    return _style_and_deduplicate_questions(questions)
+            if isinstance(data, list):
+                questions = _normalize_questions(data, student_mode=False)
+                questions = _apply_classification_question_policy(questions, resolved_classification, idea=idea)
+                if questions:
+                    return _style_and_deduplicate_questions(questions)
+        except Exception:
+            logger.exception("generate_questions llm attempt failed")
+            continue
 
     return _style_and_deduplicate_questions(_stub_questions(idea, demand_classification=resolved_classification))
 
@@ -5658,10 +5711,14 @@ def _rewrite_prompt_by_user_method(
     if "[Model Target]" in source and "[Core Prompt]" in source:
         return source
 
-    resolved_api_key = custom_api_key if _has_valid_key(custom_api_key) else settings.openai_api_key
-    resolved_base_url = custom_base_url if _has_valid_key(custom_api_key) else "https://api.openai.com/v1"
-    resolved_model = custom_model or settings.qwen_model
-    if not _has_valid_key(resolved_api_key):
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    if not attempts:
         return _natural_prompt_fallback(source, prompt_language)
 
     target_language = _normalize_prompt_language(prompt_language)
@@ -5695,24 +5752,25 @@ def _rewrite_prompt_by_user_method(
 原始提示詞：
 {source}
 """
-    try:
-        client = _client(resolved_api_key, resolved_base_url)
-        model = resolved_model
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "你是資深提示詞優化專家，只輸出最終可執行提示詞。"},
-                {"role": "user", "content": instruction},
-            ],
-            temperature=0.1,
-            timeout=25,
-        )
-        content = _strip_code_fence(str(completion.choices[0].message.content or "").strip())
-        if content and not _looks_like_refusal_text(content):
-            content = _collapse_repeated_clauses(_humanize_text(content))
-            return content.strip()
-    except Exception:
-        logger.exception("strict prompt rewrite failed")
+    for api_key, base_url, model in attempts:
+        try:
+            client = _client(api_key, base_url)
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "你是資深提示詞優化專家，只輸出最終可執行提示詞。"},
+                    {"role": "user", "content": instruction},
+                ],
+                temperature=0.1,
+                timeout=25,
+            )
+            content = _strip_code_fence(str(completion.choices[0].message.content or "").strip())
+            if content and not _looks_like_refusal_text(content):
+                content = _collapse_repeated_clauses(_humanize_text(content))
+                return content.strip()
+        except Exception:
+            logger.exception("strict prompt rewrite attempt failed")
+            continue
 
     return _natural_prompt_fallback(source, prompt_language)
 
@@ -5768,6 +5826,9 @@ def generate_final_prompt_strict(
         custom_base_url=custom_base_url,
         custom_model=custom_model,
     )
+    if _is_low_quality_final_prompt(rewritten):
+        # 使用原始高語義草稿重試，避免重寫器把內容壓成模板句。
+        rewritten = base_prompt
     stabilized = _stabilize_final_prompt_text(
         prompt_text=rewritten,
         primary_code=primary_code,
@@ -5779,8 +5840,22 @@ def generate_final_prompt_strict(
         custom_base_url=custom_base_url,
         custom_model=custom_model,
     )
+    if _is_low_quality_final_prompt(stabilized):
+        stabilized = _stabilize_final_prompt_text(
+            prompt_text=base_prompt,
+            primary_code=primary_code,
+            sub_code=(sub_codes[0] if sub_codes else ""),
+            prompt_language=prompt_language,
+            is_video_mode=(mode_hint == "video"),
+            is_music_mode=(mode_hint == "music"),
+            custom_api_key=custom_api_key,
+            custom_base_url=custom_base_url,
+            custom_model=custom_model,
+        )
     if _looks_like_refusal_text(stabilized):
         return _natural_prompt_fallback(stabilized, prompt_language)
+    if _is_low_quality_final_prompt(stabilized):
+        return _natural_prompt_fallback(base_prompt, prompt_language)
     return _strip_code_fence(stabilized)
 
 
@@ -7087,16 +7162,20 @@ def _synthesize_coding_solution_brief(
     custom_model: Optional[str] = None,
 ) -> Dict[str, object]:
     fallback = _fallback_coding_solution_brief(idea, fields, questions, answers)
-    resolved_api_key = custom_api_key if _has_valid_key(custom_api_key) else settings.openai_api_key
-    resolved_base_url = custom_base_url if _has_valid_key(custom_api_key) else "https://api.openai.com/v1"
-    resolved_model = custom_model or settings.qwen_model
-    if not _has_valid_key(resolved_api_key):
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    if not attempts:
         return fallback
-    try:
-        client = _client(resolved_api_key, resolved_base_url)
-        model = resolved_model
-        qa_lines = _qa_summary_lines(questions, answers, limit=8)
-        instruction = f"""
+    for api_key, base_url, model in attempts:
+        try:
+            client = _client(api_key, base_url)
+            qa_lines = _qa_summary_lines(questions, answers, limit=8)
+            instruction = f"""
 你是資深產品架構師與技術 PM。
 請根據使用者需求，輸出一份「可執行的編程方案摘要」JSON。
 
@@ -7139,49 +7218,50 @@ JSON schema:
   "solution_rationale": "string"
 }}
 """
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "你是需求方案合成器，只輸出 JSON。"},
-                {"role": "user", "content": instruction},
-            ],
-            temperature=0.3,
-            timeout=20,
-        )
-        content = str(completion.choices[0].message.content or "").strip()
-        data = _extract_json_payload(content)
-        if not isinstance(data, dict):
-            return fallback
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "你是需求方案合成器，只輸出 JSON。"},
+                    {"role": "user", "content": instruction},
+                ],
+                temperature=0.3,
+                timeout=20,
+            )
+            content = str(completion.choices[0].message.content or "").strip()
+            data = _extract_json_payload(content)
+            if not isinstance(data, dict):
+                continue
 
-        merged = dict(fallback)
-        for key in [
-            "product_positioning",
-            "target_users",
-            "core_value",
-            "core_user_flow",
-            "tech_solution",
-            "final_vision",
-            "solution_rationale",
-        ]:
-            value = str(data.get(key) or "").strip()
-            if value and not _is_placeholder_like(value):
-                merged[key] = value
+            merged = dict(fallback)
+            for key in [
+                "product_positioning",
+                "target_users",
+                "core_value",
+                "core_user_flow",
+                "tech_solution",
+                "final_vision",
+                "solution_rationale",
+            ]:
+                value = str(data.get(key) or "").strip()
+                if value and not _is_placeholder_like(value):
+                    merged[key] = value
 
-        for key in ["mvp_features", "delivery_plan", "acceptance_gwt", "non_goals", "assumptions"]:
-            values = data.get(key)
-            if isinstance(values, list):
-                cleaned = [str(item).strip() for item in values if str(item).strip()]
-                if cleaned:
-                    if key in {"acceptance_gwt", "non_goals"}:
-                        merged[key] = cleaned[:3]
-                    else:
-                        merged[key] = cleaned[:5]
-        if not _is_coding_solution_domain_aligned(idea, merged):
-            return fallback
-        return merged
-    except Exception:
-        logger.exception("synthesize coding solution brief failed")
-        return fallback
+            for key in ["mvp_features", "delivery_plan", "acceptance_gwt", "non_goals", "assumptions"]:
+                values = data.get(key)
+                if isinstance(values, list):
+                    cleaned = [str(item).strip() for item in values if str(item).strip()]
+                    if cleaned:
+                        if key in {"acceptance_gwt", "non_goals"}:
+                            merged[key] = cleaned[:3]
+                        else:
+                            merged[key] = cleaned[:5]
+            if not _is_coding_solution_domain_aligned(idea, merged):
+                continue
+            return merged
+        except Exception:
+            logger.exception("synthesize coding solution brief attempt failed")
+            continue
+    return fallback
 
 
 def _collect_music_signal(questions: List[dict], answers: List[dict]) -> Dict[str, str]:
@@ -7365,13 +7445,20 @@ def _synthesize_music_solution_brief(
     custom_model: Optional[str] = None,
 ) -> Dict[str, object]:
     fallback = _fallback_music_solution_brief(idea, fields, questions, answers)
-    if not _has_valid_key(custom_api_key):
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    if not attempts:
         return fallback
-    try:
-        client = _client(custom_api_key, custom_base_url)
-        model = custom_model or settings.qwen_model
-        qa_lines = _qa_summary_lines(questions, answers, limit=8)
-        instruction = f"""
+    for api_key, base_url, model in attempts:
+        try:
+            client = _client(api_key, base_url)
+            qa_lines = _qa_summary_lines(questions, answers, limit=8)
+            instruction = f"""
 你是資深音樂製作總監與提示詞工程師。
 請根據需求輸出「可直接執行的音樂提示詞方案」JSON。
 
@@ -7411,43 +7498,44 @@ JSON schema:
   "assumptions":["string"]
 }}
 """
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "你是音樂提示詞方案合成器，只輸出 JSON。"},
-                {"role": "user", "content": instruction},
-            ],
-            temperature=0.3,
-            timeout=20,
-        )
-        data = _extract_json_payload(str(completion.choices[0].message.content or "").strip())
-        if not isinstance(data, dict):
-            return fallback
-        merged = dict(fallback)
-        for key in [
-            "assistant_role",
-            "music_goal",
-            "target_audience",
-            "use_scene",
-            "music_model",
-            "style_profile",
-            "arrangement_profile",
-            "lyrics_profile",
-            "must_avoid",
-        ]:
-            value = str(data.get(key) or "").strip()
-            if value and not _is_placeholder_like(value):
-                merged[key] = value
-        for key in ["deliverables", "workflow", "acceptance_checks", "assumptions"]:
-            values = data.get(key)
-            if isinstance(values, list):
-                cleaned = [str(item).strip() for item in values if str(item).strip()]
-                if cleaned:
-                    merged[key] = cleaned[:4] if key == "workflow" else cleaned[:3]
-        return merged
-    except Exception:
-        logger.exception("synthesize music solution brief failed")
-        return fallback
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "你是音樂提示詞方案合成器，只輸出 JSON。"},
+                    {"role": "user", "content": instruction},
+                ],
+                temperature=0.3,
+                timeout=20,
+            )
+            data = _extract_json_payload(str(completion.choices[0].message.content or "").strip())
+            if not isinstance(data, dict):
+                continue
+            merged = dict(fallback)
+            for key in [
+                "assistant_role",
+                "music_goal",
+                "target_audience",
+                "use_scene",
+                "music_model",
+                "style_profile",
+                "arrangement_profile",
+                "lyrics_profile",
+                "must_avoid",
+            ]:
+                value = str(data.get(key) or "").strip()
+                if value and not _is_placeholder_like(value):
+                    merged[key] = value
+            for key in ["deliverables", "workflow", "acceptance_checks", "assumptions"]:
+                values = data.get(key)
+                if isinstance(values, list):
+                    cleaned = [str(item).strip() for item in values if str(item).strip()]
+                    if cleaned:
+                        merged[key] = cleaned[:4] if key == "workflow" else cleaned[:3]
+            return merged
+        except Exception:
+            logger.exception("synthesize music solution brief attempt failed")
+            continue
+    return fallback
 
 
 def _collect_dialogue_signal(questions: List[dict], answers: List[dict]) -> Dict[str, str]:
@@ -7611,13 +7699,20 @@ def _synthesize_dialogue_solution_brief(
     custom_model: Optional[str] = None,
 ) -> Dict[str, object]:
     fallback = _fallback_dialogue_solution_brief(idea, fields, questions, answers)
-    if not _has_valid_key(custom_api_key):
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    if not attempts:
         return fallback
-    try:
-        client = _client(custom_api_key, custom_base_url)
-        model = custom_model or settings.qwen_model
-        qa_lines = _qa_summary_lines(questions, answers, limit=8)
-        instruction = f"""
+    for api_key, base_url, model in attempts:
+        try:
+            client = _client(api_key, base_url)
+            qa_lines = _qa_summary_lines(questions, answers, limit=8)
+            instruction = f"""
 你是對話提示詞規劃專家。
 請根據使用者需求輸出「可執行對話提示詞方案」JSON。
 
@@ -7661,44 +7756,45 @@ JSON schema:
   "assumptions":["string"]
 }}
 """
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "你是對話方案合成器，只輸出 JSON，且以 RTFC 框架整理。"},
-                {"role": "user", "content": instruction},
-            ],
-            temperature=0.3,
-            timeout=20,
-        )
-        data = _extract_json_payload(str(completion.choices[0].message.content or "").strip())
-        if not isinstance(data, dict):
-            return fallback
-        merged = dict(fallback)
-        for key in [
-            "assistant_role",
-            "dialogue_goal",
-            "target_audience",
-            "tone_boundary",
-            "turn_rules",
-            "correction_policy",
-            "context_anchor",
-        ]:
-            value = str(data.get(key) or "").strip()
-            if value and not _is_placeholder_like(value):
-                merged[key] = value
-        for key in ["response_strategy", "content_focus_points", "success_checks", "non_goals", "assumptions"]:
-            values = data.get(key)
-            if isinstance(values, list):
-                cleaned = [str(item).strip() for item in values if str(item).strip()]
-                if cleaned:
-                    if key in {"success_checks", "non_goals"}:
-                        merged[key] = cleaned[:3]
-                    else:
-                        merged[key] = cleaned[:5]
-        return merged
-    except Exception:
-        logger.exception("synthesize dialogue solution brief failed")
-        return fallback
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "你是對話方案合成器，只輸出 JSON，且以 RTFC 框架整理。"},
+                    {"role": "user", "content": instruction},
+                ],
+                temperature=0.3,
+                timeout=20,
+            )
+            data = _extract_json_payload(str(completion.choices[0].message.content or "").strip())
+            if not isinstance(data, dict):
+                continue
+            merged = dict(fallback)
+            for key in [
+                "assistant_role",
+                "dialogue_goal",
+                "target_audience",
+                "tone_boundary",
+                "turn_rules",
+                "correction_policy",
+                "context_anchor",
+            ]:
+                value = str(data.get(key) or "").strip()
+                if value and not _is_placeholder_like(value):
+                    merged[key] = value
+            for key in ["response_strategy", "content_focus_points", "success_checks", "non_goals", "assumptions"]:
+                values = data.get(key)
+                if isinstance(values, list):
+                    cleaned = [str(item).strip() for item in values if str(item).strip()]
+                    if cleaned:
+                        if key in {"success_checks", "non_goals"}:
+                            merged[key] = cleaned[:3]
+                        else:
+                            merged[key] = cleaned[:5]
+            return merged
+        except Exception:
+            logger.exception("synthesize dialogue solution brief attempt failed")
+            continue
+    return fallback
 
 
 def _is_research_like_dialogue(text: str) -> bool:
@@ -7946,16 +8042,23 @@ def _regenerate_prompt_with_quality_gate(
     custom_base_url: Optional[str] = None,
     custom_model: Optional[str] = None,
 ) -> str:
-    if not _has_valid_key(custom_api_key):
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    if not attempts:
         return ""
-    try:
-        client = _client(custom_api_key, custom_base_url)
-        model = custom_model or settings.qwen_model
-        quality_score = int(quality.get("score") or 0)
-        failed_checks = quality.get("failed") or []
-        failed_text = "、".join(str(item) for item in failed_checks) if failed_checks else "無"
+    for api_key, base_url, model in attempts:
+        try:
+            client = _client(api_key, base_url)
+            quality_score = int(quality.get("score") or 0)
+            failed_checks = quality.get("failed") or []
+            failed_text = "、".join(str(item) for item in failed_checks) if failed_checks else "無"
 
-        instruction = f"""
+            instruction = f"""
 你是資深需求提示詞工程師，請將以下草稿重寫為「可直接餵給下游 AI 執行」的高品質提示詞。
 
 硬性規則：
@@ -7990,24 +8093,26 @@ def _regenerate_prompt_with_quality_gate(
 分數：{quality_score}
 未通過項：{failed_text}
 """
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "你是高品質提示詞重寫器，只輸出最終提示詞文字。"},
-                {"role": "user", "content": instruction},
-            ],
-            temperature=0.2,
-            timeout=20,
-        )
-        content = str(completion.choices[0].message.content or "").strip()
-        if not content:
-            return ""
-        content = re.sub(r"^```(?:text)?\s*", "", content)
-        content = re.sub(r"\s*```$", "", content).strip()
-        return content
-    except Exception:
-        logger.exception("quality-gate regenerate prompt failed")
-        return ""
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "你是高品質提示詞重寫器，只輸出最終提示詞文字。"},
+                    {"role": "user", "content": instruction},
+                ],
+                temperature=0.2,
+                timeout=20,
+            )
+            content = str(completion.choices[0].message.content or "").strip()
+            if not content:
+                continue
+            content = re.sub(r"^```(?:text)?\s*", "", content)
+            content = re.sub(r"\s*```$", "", content).strip()
+            if content:
+                return content
+        except Exception:
+            logger.exception("quality-gate regenerate prompt attempt failed")
+            continue
+    return ""
 
 
 def _build_coding_solution_prompt(
@@ -8716,9 +8821,14 @@ def _generate_music_prompt_with_llm(
     custom_base_url: Optional[str] = None,
     custom_model: Optional[str] = None,
 ) -> str:
-    has_custom = _has_valid_key(custom_api_key)
-    has_openai = _has_valid_key(settings.openai_api_key)
-    if not has_custom and not has_openai:
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    if not attempts:
         return ""
 
     qa_lines = []
@@ -8781,28 +8891,7 @@ Must Avoid: {music_solution.get('must_avoid', '')}
 {qa_block}
 """
 
-    # 優先走 OpenAI 官方端點，其次才是自訂端點，提升穩定性。
-    attempts: List[tuple[Optional[str], Optional[str], Optional[str]]] = []
-    if has_openai:
-        attempts.append((settings.openai_api_key, "https://api.openai.com/v1", "gpt-4o"))
-    if has_custom:
-        attempts.append((custom_api_key, custom_base_url, custom_model or settings.qwen_model))
-
-    deduped_attempts: List[tuple[Optional[str], Optional[str], Optional[str]]] = []
-    seen_attempts: set[tuple[str, str, str]] = set()
     for api_key, base_url, model_name in attempts:
-        key = str(api_key or "").strip()
-        base = str(base_url or "").strip()
-        model = str(model_name or "").strip()
-        signature = (key, base, model)
-        if not key or signature in seen_attempts:
-            continue
-        seen_attempts.add(signature)
-        deduped_attempts.append((api_key, base_url, model_name))
-
-    for api_key, base_url, model_name in deduped_attempts:
-        if not _has_valid_key(api_key):
-            continue
         try:
             client = _client(api_key=api_key, base_url=base_url)
             completion = client.chat.completions.create(
@@ -9112,9 +9201,14 @@ def _generate_image_prompt_with_llm(
     custom_base_url: Optional[str] = None,
     custom_model: Optional[str] = None,
 ) -> str:
-    has_custom = _has_valid_key(custom_api_key)
-    has_openai = _has_valid_key(settings.openai_api_key)
-    if not has_custom and not has_openai:
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    if not attempts:
         return ""
 
     qa_lines: List[str] = []
@@ -9166,15 +9260,7 @@ Acceptance: {fields.get('acceptance', '')}
 [Q&A]
 {qa_block}
 """
-    attempts: List[tuple[Optional[str], Optional[str], Optional[str]]] = []
-    if has_openai:
-        attempts.append((settings.openai_api_key, "https://api.openai.com/v1", "gpt-4o"))
-    if has_custom:
-        attempts.append((custom_api_key, custom_base_url, custom_model or settings.qwen_model))
-
     for api_key, base_url, model_name in attempts:
-        if not _has_valid_key(api_key):
-            continue
         try:
             client = _client(api_key, base_url)
             completion = client.chat.completions.create(
@@ -9824,26 +9910,33 @@ def _generate_video_prompt_with_llm(
     custom_base_url: Optional[str] = None,
     custom_model: Optional[str] = None,
 ) -> str:
-    if not _has_valid_key(custom_api_key):
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    if not attempts:
         return ""
 
-    try:
-        client = _client(custom_api_key, custom_base_url)
-        model = custom_model or settings.qwen_model
-        model_target_hint = _extract_video_model_preference(questions, answers, " ".join(str(item or "") for item in selected_ai_types).lower())
-        onscreen_text_language = _extract_on_screen_text_language_preference(questions, answers, profile)
-        onscreen_text_language_hint = _language_label_for_output(onscreen_text_language, False)
-        qa_lines = []
-        for q, a in zip(questions or [], answers or []):
-            q_text = str(q.get("text") if isinstance(q, dict) else q or "").strip()
-            a_text = str(a.get("answer") if isinstance(a, dict) else a or "").strip()
-            if not a_text:
-                continue
-            qa_lines.append(f"- {q_text}: {a_text}")
-        qa_block = "\n".join(qa_lines) if qa_lines else "- 未提供額外問答"
-        language_for_prompt = _normalize_prompt_language(prompt_language)
+    for api_key, base_url, model in attempts:
+        try:
+            client = _client(api_key, base_url)
+            model_target_hint = _extract_video_model_preference(questions, answers, " ".join(str(item or "") for item in selected_ai_types).lower())
+            onscreen_text_language = _extract_on_screen_text_language_preference(questions, answers, profile)
+            onscreen_text_language_hint = _language_label_for_output(onscreen_text_language, False)
+            qa_lines = []
+            for q, a in zip(questions or [], answers or []):
+                q_text = str(q.get("text") if isinstance(q, dict) else q or "").strip()
+                a_text = str(a.get("answer") if isinstance(a, dict) else a or "").strip()
+                if not a_text:
+                    continue
+                qa_lines.append(f"- {q_text}: {a_text}")
+            qa_block = "\n".join(qa_lines) if qa_lines else "- 未提供額外問答"
+            language_for_prompt = _normalize_prompt_language(prompt_language)
 
-        instruction = f"""
+            instruction = f"""
 你是資深 AI 影片提示詞工程師。請根據使用者輸入生成「可直接投餵影片模型」的最終提示詞。
 
 嚴格格式要求（只輸出以下四段，不能有其他段落）：
@@ -9887,24 +9980,25 @@ camera_stability: ...
 [問答內容]
 {qa_block}
 """
-        for _ in range(2):
-            completion = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "你是專業影片提示詞工程師，只輸出最終提示詞正文。"},
-                    {"role": "user", "content": instruction},
-                ],
-                temperature=0.4,
-                timeout=25,
-            )
-            content = str(completion.choices[0].message.content or "").strip()
-            content = re.sub(r"^```[a-zA-Z]*\n", "", content)
-            content = re.sub(r"\n```$", "", content).strip()
-            normalized = _normalize_video_prompt_sections(content)
-            if normalized:
-                return _force_video_model_target(normalized, model_target_hint)
-    except Exception:
-        logger.exception("video prompt llm generation fallback")
+            for _ in range(2):
+                completion = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "你是專業影片提示詞工程師，只輸出最終提示詞正文。"},
+                        {"role": "user", "content": instruction},
+                    ],
+                    temperature=0.4,
+                    timeout=25,
+                )
+                content = str(completion.choices[0].message.content or "").strip()
+                content = re.sub(r"^```[a-zA-Z]*\n", "", content)
+                content = re.sub(r"\n```$", "", content).strip()
+                normalized = _normalize_video_prompt_sections(content)
+                if normalized:
+                    return _force_video_model_target(normalized, model_target_hint)
+        except Exception:
+            logger.exception("video prompt llm generation attempt failed")
+            continue
     return ""
 
 
@@ -10436,6 +10530,9 @@ def _extract_leading_role_fragment(text: str) -> str:
         r"^\s*you are\s+([^.!?\n,，]{1,80})",
         r"^\s*あなたは\s*([^。！？!\n,，]{1,80})",
         r"^\s*당신은\s+([^.!?\n,，]{1,80})(?:입니다)?",
+        r"^\s*作為一[名位]\s*([^，,。！？!\n]{1,80})",
+        r"^\s*身為一[名位]\s*([^，,。！？!\n]{1,80})",
+        r"^\s*as an?\s+([^,.;!?\n]{1,80})",
     ]
     for pattern in patterns:
         matched = re.match(pattern, raw, flags=re.IGNORECASE)
@@ -10522,6 +10619,8 @@ def _looks_malformed_prompt_text(text: str) -> bool:
         "回覆語言使用未提供",
         "並依序回答時請",
         "並依序回覆時請",
+        "你的任務是整體目標是讓",
+        "回答時請保持清楚、簡潔且可執行；最終輸出語言使用未提供",
     ]
     if any(pattern in raw for pattern in hard_bad_patterns):
         return True
@@ -10533,7 +10632,49 @@ def _looks_malformed_prompt_text(text: str) -> bool:
         return True
     if any(token in lowered for token in ["未提供；並依序", "unknown; and then"]):
         return True
+    if raw.count("最終輸出語言使用") >= 2 or raw.count("回覆語言使用") >= 2:
+        return True
+    if raw.count("你的任務是") >= 3:
+        return True
     return False
+
+
+def _contains_hard_placeholder_tokens(text: str) -> bool:
+    lowered = str(text or "").lower()
+    if not lowered:
+        return False
+    tokens = ["未提供", "unknown", "n/a", "none", "null", "tbd"]
+    return any(token in lowered for token in tokens)
+
+
+def _is_low_quality_final_prompt(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return True
+    if _looks_malformed_prompt_text(raw):
+        return True
+    if _contains_hard_placeholder_tokens(raw):
+        return True
+    normalized = _collapse_repeated_clauses(raw)
+    if len(normalized) < 80:
+        return True
+    signal_tokens = [
+        "使用者",
+        "流程",
+        "功能",
+        "限制",
+        "驗收",
+        "輸入",
+        "輸出",
+        "api",
+        "資料",
+        "部署",
+        "角色",
+        "目標",
+    ]
+    lowered = normalized.lower()
+    hit = sum(1 for token in signal_tokens if token.lower() in lowered)
+    return hit < 3
 
 
 def _normalize_language_rules_in_text(text: str, prompt_language: str) -> str:
@@ -10660,7 +10801,7 @@ def _normalize_role_sentence(
         return text
     default_role = _default_role_for_classification(primary_code, sub_code)
     leading_match = re.match(
-        r"^\s*(?:你是|you are|あなたは|당신은)\s*([^。！？!,.，\n]{1,80})(?:\s*입니다)?",
+        r"^\s*(?:你是|you are|あなたは|당신은|作為一[名位]|身為一[名位]|as an?)\s*([^。！？!,.，\n]{1,80})(?:\s*입니다)?",
         text,
         flags=re.IGNORECASE,
     )
@@ -10680,6 +10821,72 @@ def _normalize_role_sentence(
     intro = _render_role_intro(default_role, prompt_language)
     period = "." if _is_english_language(prompt_language) else "。"
     return f"{intro}{period} {text}".strip()
+
+
+def _enforce_second_person_voice(text: str, prompt_language: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return raw
+
+    if _is_english_language(prompt_language):
+        normalized = raw
+        normalized = re.sub(
+            r"^\s*As an?\s+([^,.\n]{1,80}),\s*my\s+main\s+task\s+is",
+            r"You are \1, and your main task is",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        normalized = re.sub(
+            r"^\s*I am\s+([^,.\n]{1,80}),\s*and\s+my\s+task\s+is",
+            r"You are \1, and your task is",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        replacements = [
+            (r"\bmy main task is\b", "your main task is"),
+            (r"\bmy task is\b", "your task is"),
+            (r"\bI will\b", "you will"),
+            (r"\bI need to\b", "you need to"),
+            (r"\bI should\b", "you should"),
+            (r"\bI can\b", "you can"),
+        ]
+        for pattern, repl in replacements:
+            normalized = re.sub(pattern, repl, normalized, flags=re.IGNORECASE)
+        return normalized.strip()
+
+    if _is_japanese_language(prompt_language) or _is_korean_language(prompt_language):
+        return raw
+
+    normalized = raw
+    normalized = re.sub(
+        r"^\s*作為一[名位]\s*([^，,。！？!\n]{1,80})\s*[，,]\s*我的主要任務是",
+        r"你是\1，你的主要任務是",
+        normalized,
+    )
+    normalized = re.sub(
+        r"^\s*身為一[名位]\s*([^，,。！？!\n]{1,80})\s*[，,]\s*我的主要任務是",
+        r"你是\1，你的主要任務是",
+        normalized,
+    )
+    normalized = re.sub(
+        r"^\s*我是\s*([^，,。！？!\n]{1,80})\s*[，,]\s*我的(?:主要)?任務是",
+        r"你是\1，你的任務是",
+        normalized,
+    )
+    replacements = [
+        ("我的主要任務是", "你的主要任務是"),
+        ("我的任務是", "你的任務是"),
+        ("我的工作是", "你的工作是"),
+        ("我主要負責", "你主要負責"),
+        ("我負責", "你負責"),
+        ("我會", "你會"),
+        ("我將", "你將"),
+        ("我需要", "你需要"),
+        ("我遵循", "你需遵循"),
+    ]
+    for old, new in replacements:
+        normalized = normalized.replace(old, new)
+    return normalized.strip()
 
 
 def _ensure_three_paragraphs(text: str) -> str:
@@ -10737,6 +10944,7 @@ def _stabilize_final_prompt_text(
     text = _collapse_repeated_clauses(text)
     text = _normalize_language_rules_in_text(text, prompt_language)
     text = _normalize_role_sentence(text, primary_code, sub_code, prompt_language)
+    text = _enforce_second_person_voice(text, prompt_language)
     text = _remove_hard_placeholder_sentences(text, primary_code, sub_code, prompt_language)
     text = _ensure_three_paragraphs(text)
     if _looks_malformed_prompt_text(text):
@@ -10782,199 +10990,67 @@ def _natural_prompt_fallback(prompt_text: str, prompt_language: str) -> str:
         return f"{role_intro}。請先釐清使用者目標，再提供可直接執行的回答；資訊不足時先列待確認項目。"
 
     lines = [ln.strip() for ln in text.splitlines() if ln and ln.strip()]
-    cleaned: List[str] = []
     label_pattern = re.compile(
         r"^(任務定位|任務目標|輸入資料|輸出格式|限制條件|驗收標準|執行方法|硬性要求|AI 自動對話方案|自動補充假設|角色設定|對話目標|回覆規則|回答流程|內容重點|糾錯策略|成功標準)\s*[:：]\s*",
         flags=re.IGNORECASE,
     )
 
+    cleaned: List[str] = []
     for ln in lines:
-        ln = re.sub(r"^[#>*\-\d\.\)\s]+", "", ln).strip()
+        ln = re.sub(r"^[#>*\\-\\d\\.\\)\\s]+", "", ln).strip()
         ln = re.sub(label_pattern, "", ln).strip()
         if not ln:
             continue
-        if " | " in ln:
+        lowered = ln.lower()
+        if any(token in lowered for token in ["未提供", "unknown", "n/a", "none", "null", "tbd"]):
             continue
         if ln in {"驗收標準", "檢查方法", "是否達成"}:
             continue
         cleaned.append(ln)
 
-    role_bits: List[str] = []
-    goal_bits: List[str] = []
-    rule_bits: List[str] = []
-    flow_bits: List[str] = []
-    success_bits: List[str] = []
-    other_bits: List[str] = []
-
-    def _strip_language_rule_fragments(text: str) -> str:
-        value = str(text or "").strip()
-        if not value:
-            return ""
-        parts = [seg.strip() for seg in re.split(r"[；;。]", value) if seg and seg.strip()]
-        kept_parts: List[str] = []
-        for part in parts:
-            lowered = part.lower()
-            if "最終輸出語言使用" in part or "回覆語言使用" in part:
-                continue
-            if lowered in {"未提供", "unknown", "n/a", "none", "null", "tbd", "待確認"}:
-                continue
-            kept_parts.append(part)
-        return "；".join(kept_parts).strip()
-
-    def _cleanup_behavior_clause(text_value: str) -> str:
-        clause = str(text_value or "").strip()
-        if not clause:
-            return ""
-        clause = re.sub(r"(最終輸出語言使用|回覆語言使用)\s*[^；;。！？!\n]+", "", clause, flags=re.IGNORECASE)
-        clause = re.sub(r"^(回答時請|回覆時請|請|並依序|依序|另外請遵守)\s*", "", clause)
-        clause = re.sub(r"\s{2,}", " ", clause).strip(" ，,。；;")
-        lowered = clause.lower()
-        if not clause or lowered in {"未提供", "unknown", "n/a", "none", "null", "tbd", "待確認"}:
-            return ""
-        return clause
-
-    def _extract_role_and_mission(raw_text: str) -> tuple[str, str]:
-        raw = str(raw_text or "").strip()
-        if not raw:
-            return "", ""
-
-        zh_match = re.search(r"你是([^，,。；;\n]+)", raw)
-        role = zh_match.group(1).strip() if zh_match else ""
-
-        mission = ""
-        for marker in ["你的任務是", "任務是", "目標是", "核心目標是"]:
-            if marker in raw:
-                mission = raw.split(marker, 1)[1].strip(" ，,。；;\n")
-                break
-        if mission.startswith("整體目標是讓"):
-            mission = mission[len("整體目標是讓") :].strip(" ，,。；;\n")
-        if mission.startswith("使用者"):
-            mission = f"讓{mission}"
-
-        return role, mission
-
-    def _split_clauses(raw_text: str) -> List[str]:
-        raw = str(raw_text or "").strip()
-        if not raw:
-            return []
-        parts = re.split(r"[；;。]\s*|\n+", raw)
-        clauses: List[str] = []
-        for part in parts:
-            clause = str(part or "").strip(" ，,。；;\t\r\n")
-            if not clause:
-                continue
-            clauses.append(clause)
-        return clauses
-
-    def _canonical_clause(text_value: str) -> str:
-        text_local = str(text_value or "").strip()
-        text_local = re.sub(r"^(並依序|並且|以及|接著|然後|再|最後)\s*", "", text_local)
-        text_local = re.sub(r"^(回答時請|回覆時請|請)\s*", "", text_local)
-        text_local = re.sub(r"\s+", "", text_local)
-        text_local = re.sub(r"[，,。；;：:、!！?？\"'`（）()【】\[\]]", "", text_local)
-        return text_local.lower()
-
-    for ln in cleaned:
-        role_candidate, mission_candidate = _extract_role_and_mission(ln)
-        if role_candidate:
-            role_bits.append(role_candidate)
-        if mission_candidate:
-            goal_bits.append(mission_candidate)
-
-        stripped_line = _strip_language_rule_fragments(ln)
-        for clause in _split_clauses(stripped_line):
-            lower = clause.lower()
-            if not clause:
-                continue
-            if any(token in lower for token in ["未提供", "unknown", "n/a", "none", "null", "tbd", "待確認"]):
-                continue
-            if "你是" in clause or "you are" in lower:
-                continue
-            if clause.startswith("整體目標是讓"):
-                success_bits.append(clause[len("整體目標是讓") :].strip(" ，,。；;"))
-                continue
-
-            is_flow = any(token in clause for token in ["先", "再", "最後", "依序", "步驟", "流程"])
-            is_rule = any(token in clause for token in ["回答時", "回覆時", "語氣", "語言", "規則", "簡潔", "可執行", "糾錯", "限制"])
-            is_goal = any(token in clause for token in ["任務", "目標", "交付", "輸出", "完成", "建立", "產出", "協助"])
-            is_success = any(token in clause for token in ["成功", "驗收", "完成標準", "符合", "達成", "使用者"])
-
-            if is_rule:
-                cleaned_clause = _cleanup_behavior_clause(clause)
-                if cleaned_clause:
-                    rule_bits.append(cleaned_clause)
-            elif is_flow:
-                cleaned_clause = _cleanup_behavior_clause(clause)
-                if cleaned_clause:
-                    flow_bits.append(cleaned_clause)
-            elif is_success and not is_goal:
-                success_bits.append(clause)
-            elif is_goal:
-                goal_bits.append(clause)
-            elif "你是" not in clause and "角色" not in clause:
-                other_bits.append(clause)
-
-    def _dedupe(items: List[str], limit: int) -> List[str]:
-        out: List[str] = []
-        seen_keys = set()
-        for item in items:
-            item = item.strip("；;，,。 ")
-            if not item:
-                continue
-            key = _canonical_clause(item)
-            if not key or key in seen_keys:
-                continue
-            seen_keys.add(key)
-            out.append(item)
-            if len(out) >= limit:
-                break
-        return out
-
-    role_bits = _dedupe(role_bits, 2)
-    goal_bits = _dedupe(goal_bits, 3)
-    rule_bits = _dedupe(rule_bits, 4)
-    flow_bits = _dedupe(flow_bits, 3)
-    success_bits = _dedupe(success_bits, 3)
-    other_bits = _dedupe(other_bits, 3)
-
-    role_candidate = role_bits[0] if role_bits else "資深顧問"
-    role_candidate = _extract_leading_role_fragment(role_candidate) or role_candidate
+    role_candidate = _extract_leading_role_fragment(text) or "資深顧問"
     role_sentence = _render_role_intro(role_candidate, prompt_language)
 
-    mission = "；".join(goal_bits or other_bits[:2] or ["協助使用者完成目標"])
-    mission = re.sub(r"^整體目標是讓", "", mission).strip(" ，,。；;")
-    mission = _collapse_repeated_clauses(mission)
-    connector = ", and your task is " if _is_english_language(prompt_language) else "，你的任務是"
-    end_mark = "." if _is_english_language(prompt_language) else "。"
-    paragraph_1 = f"{role_sentence}{connector}{mission}{end_mark}"
+    clauses: List[str] = []
+    for chunk in cleaned:
+        for seg in re.split(r"[。！？!?；;\\n]+", chunk):
+            seg = str(seg or "").strip(" ，,。；;")
+            if not seg:
+                continue
+            if any(token in seg for token in ["你是", "you are", "最終輸出語言使用", "回覆語言使用"]):
+                continue
+            clauses.append(seg)
 
-    clean_rule_bits = [_cleanup_behavior_clause(_strip_language_rule_fragments(item)) for item in rule_bits]
-    clean_rule_bits = [item for item in clean_rule_bits if item]
-    rules = "；".join(clean_rule_bits or ["保持清楚、簡潔且可執行"])
-    rules = _collapse_repeated_clauses(rules)
-    clean_flow_bits = [_cleanup_behavior_clause(item) for item in flow_bits]
-    clean_flow_bits = [item for item in clean_flow_bits if item]
-    flows = "；".join(clean_flow_bits or ["先釐清需求，再給結論，最後補下一步"])
-    flows = _collapse_repeated_clauses(flows)
-    flows = _cleanup_behavior_clause(flows)
-    if not flows or _canonical_clause(flows) == _canonical_clause(rules):
-        flows = "先釐清需求，再給結論，最後補下一步"
-    lang_rule = f"最終輸出語言使用{_normalize_prompt_language(prompt_language)}"
-    paragraph_2 = f"回答時請{rules}。並依序{flows}；{lang_rule}。"
+    seen = set()
+    deduped: List[str] = []
+    for seg in clauses:
+        key = re.sub(r"\\s+", "", seg)
+        key = re.sub(r"[，,。；;：:、!！?？\"'`（）()【】\\[\\]]", "", key).lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(seg)
 
-    success = "；".join(success_bits or ["最終回覆需符合任務目標與限制條件"])
-    success = _collapse_repeated_clauses(success)
-    success = success.strip()
-    success_key = _canonical_clause(success)
-    mission_key = _canonical_clause(mission)
-    if success_key and mission_key and (success_key == mission_key or success_key in mission_key or mission_key in success_key):
-        success = "最終回覆可直接執行並符合任務目標與限制條件"
-    if success.startswith("使用者"):
-        paragraph_3 = f"整體目標是讓{success}。"
+    mission = "；".join(deduped[:2]) if deduped else "協助使用者完成任務"
+    flow = "先釐清需求與限制，再給可執行結論，最後補下一步建議。"
+    success = "最終內容需符合任務目標與限制條件，且可以直接交給下游 AI 執行。"
+    language_label = _normalize_prompt_language(prompt_language)
+
+    if _is_english_language(prompt_language):
+        paragraph_1 = f"{role_sentence}, and your task is {mission}."
+        paragraph_2 = (
+            "Keep responses clear, concise, and actionable. "
+            "If information is missing, list assumptions and remaining unknowns first. "
+            f"Follow this order: clarify constraints, give an executable conclusion, then provide next steps. Final output language must be {language_label}."
+        )
+        paragraph_3 = success
     else:
-        paragraph_3 = f"整體目標是讓使用者{success}。"
+        paragraph_1 = f"{role_sentence}，你的任務是{mission}。"
+        paragraph_2 = f"回覆時請保持清楚、簡潔且可執行；資訊不足先列待確認項目，不硬猜。{flow}最終輸出語言使用{language_label}。"
+        paragraph_3 = success
 
-    return "\n\n".join([paragraph_1, paragraph_2, paragraph_3]).strip()
+    result = "\n\n".join([paragraph_1.strip(), paragraph_2.strip(), paragraph_3.strip()]).strip()
+    return _collapse_repeated_clauses(result)
 
 
 def naturalize_prompt_to_paragraphs(
@@ -10989,14 +11065,21 @@ def naturalize_prompt_to_paragraphs(
     if not source:
         return _natural_prompt_fallback(source, prompt_language)
 
-    if not _has_valid_key(custom_api_key):
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    if not attempts:
         return _natural_prompt_fallback(source, prompt_language)
 
-    try:
-        client = _client(custom_api_key, custom_base_url)
-        model = custom_model or settings.qwen_model
-        target_language = _normalize_prompt_language(prompt_language)
-        instruction = f"""
+    for api_key, base_url, model in attempts:
+        try:
+            client = _client(api_key, base_url)
+            target_language = _normalize_prompt_language(prompt_language)
+            instruction = f"""
 請把下方提示詞改寫成自然語言敘事段落，要求如下：
 1) 僅輸出 2 到 3 段，不要使用欄位標題、表格、編號或中括號。
 2) 保留關鍵資訊：角色、任務、限制、流程、成功標準。
@@ -11008,22 +11091,23 @@ def naturalize_prompt_to_paragraphs(
 原始提示詞：
 {source}
 """
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "你是提示詞語言優化專家，只輸出改寫後的最終段落。"},
-                {"role": "user", "content": instruction},
-            ],
-            temperature=0.2,
-            timeout=20,
-        )
-        content = _strip_code_fence(str(completion.choices[0].message.content or "").strip())
-        if content and not _looks_like_refusal_text(content):
-            return content
-        if _looks_like_refusal_text(content):
-            logger.warning("naturalize prompt got refusal-like output, fallback to local naturalizer")
-    except Exception:
-        logger.exception("naturalize prompt with llm failed")
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "你是提示詞語言優化專家，只輸出改寫後的最終段落。"},
+                    {"role": "user", "content": instruction},
+                ],
+                temperature=0.2,
+                timeout=20,
+            )
+            content = _strip_code_fence(str(completion.choices[0].message.content or "").strip())
+            if content and not _looks_like_refusal_text(content):
+                return content
+            if _looks_like_refusal_text(content):
+                logger.warning("naturalize prompt got refusal-like output on current attempt")
+        except Exception:
+            logger.exception("naturalize prompt with llm attempt failed")
+            continue
 
     return _natural_prompt_fallback(source, prompt_language)
 
