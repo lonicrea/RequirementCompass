@@ -10845,6 +10845,7 @@ def _enforce_second_person_voice(text: str, prompt_language: str) -> str:
         replacements = [
             (r"\bmy main task is\b", "your main task is"),
             (r"\bmy task is\b", "your task is"),
+            (r"\byour task is\s+the overall goal is to\b", "your task is to"),
             (r"\bI will\b", "you will"),
             (r"\bI need to\b", "you need to"),
             (r"\bI should\b", "you should"),
@@ -10874,6 +10875,10 @@ def _enforce_second_person_voice(text: str, prompt_language: str) -> str:
         normalized,
     )
     replacements = [
+        ("你的任務是整體目標是讓", "你的任務是讓"),
+        ("你的主要任務是整體目標是讓", "你的主要任務是讓"),
+        ("你的任務是整體目標是", "你的任務是"),
+        ("你的主要任務是整體目標是", "你的主要任務是"),
         ("我的主要任務是", "你的主要任務是"),
         ("我的任務是", "你的任務是"),
         ("我的工作是", "你的工作是"),
@@ -11015,6 +11020,12 @@ def _natural_prompt_fallback(prompt_text: str, prompt_language: str) -> str:
     for chunk in cleaned:
         for seg in re.split(r"[。！？!?；;\\n]+", chunk):
             seg = str(seg or "").strip(" ，,。；;")
+            if not seg:
+                continue
+            seg = re.sub(r"^(你的主要任務是|你的任務是)\s*整體目標是讓", r"\1讓", seg)
+            seg = re.sub(r"^(你的主要任務是|你的任務是)\s*整體目標是", r"\1", seg)
+            seg = re.sub(r"^整體目標是讓", "讓", seg)
+            seg = re.sub(r"^並依序", "", seg).strip(" ，,。；;")
             if not seg:
                 continue
             if any(token in seg for token in ["你是", "you are", "最終輸出語言使用", "回覆語言使用"]):
