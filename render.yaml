@@ -20,5 +20,9 @@ services:
         value: http://localhost:5175,http://127.0.0.1:5175
       - key: CORS_ALLOW_ORIGIN_REGEX
         value: ^https://.*\\.vercel\\.app$
+      - key: QUESTION_DYNAMIC_USE_LLM
+        value: "true"
+      - key: QUESTION_DYNAMIC_TEMPERATURE
+        value: "0"
       - key: OPENAI_API_KEY
         sync: false
