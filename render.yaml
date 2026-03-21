@@ -21,7 +21,7 @@ services:
       - key: CORS_ALLOW_ORIGIN_REGEX
         value: ^https://.*\\.vercel\\.app$
       - key: QUESTION_DYNAMIC_USE_LLM
-        value: "true"
+        value: "false"
       - key: QUESTION_DYNAMIC_TEMPERATURE
         value: "0"
       - key: OPENAI_API_KEY

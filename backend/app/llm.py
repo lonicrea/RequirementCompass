@@ -2058,8 +2058,8 @@ DIALOGUE_TARGET_FIRST_ROUND = _question_count_from_env("DIALOGUE_QUESTIONS_FIRST
 DIALOGUE_TARGET_FOLLOWUP = _question_count_from_env("DIALOGUE_QUESTIONS_FOLLOWUP", 10, minimum=10, maximum=20)
 
 # 為了讓本地與線上一致，可用環境變數控制追問是否走 LLM 與其溫度。
-# 預設仍開啟 LLM 動態追問，但溫度降到 0，降低同輸入在不同部署產生差異。
-QUESTION_DYNAMIC_USE_LLM = _bool_from_env("QUESTION_DYNAMIC_USE_LLM", True)
+# 預設關閉 LLM 動態追問，改走規則式問題生成，避免不同部署回傳不同題目。
+QUESTION_DYNAMIC_USE_LLM = _bool_from_env("QUESTION_DYNAMIC_USE_LLM", False)
 QUESTION_DYNAMIC_TEMPERATURE = _float_from_env("QUESTION_DYNAMIC_TEMPERATURE", 0.0, minimum=0.0, maximum=1.0)
 
 
@@ -3272,6 +3272,24 @@ def _dialogue_dynamic_followup_candidates(
             "choice",
             ["只改影響理解的錯", "每輪改 1-2 個重點", "逐句糾正", "先不糾錯只練流暢", "其他"],
         )
+
+    if any(token in lowered for token in ["股市", "股票", "投資", "台股", "美股", "etf", "k線", "財報"]):
+        add(candidates, "stock_scope", "你主要想分析哪個市場或標的？（例如台股、美股、ETF、特定股票）")
+        add(
+            candidates,
+            "stock_horizon",
+            "你這次分析偏短線操作還是中長線配置？",
+            "choice",
+            ["當沖/短線", "波段", "中長線", "資產配置", "尚未決定"],
+        )
+        add(
+            candidates,
+            "stock_style",
+            "你更想看哪種分析角度？",
+            "choice",
+            ["技術面", "基本面", "消息面", "三者整合", "風險控管優先"],
+        )
+        add(candidates, "stock_output", "你希望最後拿到的輸出是什麼？（例如觀察清單、進出場條件、風險提醒）")
 
     if has_history:
         add(candidates, "iteration", "看完上一輪，你現在最想先修哪一個地方？")
