@@ -17,9 +17,9 @@ services:
       - key: DB_PATH
         value: /tmp/requirement_compass.db
       - key: CORS_ALLOW_ORIGINS
-        value: http://localhost:5175,http://127.0.0.1:5175
+        value: http://localhost:5175,http://127.0.0.1:5175,https://frontend-six-silk-67.vercel.app
       - key: CORS_ALLOW_ORIGIN_REGEX
-        value: ^https://.*\\.vercel\\.app$
+        value: ^https://.*\.vercel\.app$
       - key: QUESTION_DYNAMIC_USE_LLM
         value: "false"
       - key: QUESTION_DYNAMIC_TEMPERATURE
