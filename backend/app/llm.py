@@ -1996,6 +1996,40 @@ def _question_count_from_env(env_key: str, default: int, minimum: int = 3, maxim
     return value
 
 
+def _bool_from_env(env_key: str, default: bool) -> bool:
+    raw = str(os.getenv(env_key, "")).strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    logger.warning("Invalid boolean env %s=%r, fallback to %s", env_key, raw, default)
+    return default
+
+
+def _float_from_env(env_key: str, default: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
+    raw = str(os.getenv(env_key, "")).strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except Exception:
+        logger.warning("Invalid float env %s=%r, fallback to %s", env_key, raw, default)
+        return default
+    if value < minimum or value > maximum:
+        logger.warning(
+            "Out-of-range float env %s=%s (expected %s-%s), fallback to %s",
+            env_key,
+            value,
+            minimum,
+            maximum,
+            default,
+        )
+        return default
+    return value
+
+
 # 問題數量可由環境變數覆蓋，便於不同部署快速調整。
 # 規則：
 # 1) *_FIRST_ROUND = 首輪問題數（不含尾題）
@@ -2022,6 +2056,11 @@ CODING_TARGET_FOLLOWUP = _question_count_from_env("CODING_QUESTIONS_FOLLOWUP", 1
 
 DIALOGUE_TARGET_FIRST_ROUND = _question_count_from_env("DIALOGUE_QUESTIONS_FIRST_ROUND", 10, minimum=10, maximum=20)
 DIALOGUE_TARGET_FOLLOWUP = _question_count_from_env("DIALOGUE_QUESTIONS_FOLLOWUP", 10, minimum=10, maximum=20)
+
+# 為了讓本地與線上一致，可用環境變數控制追問是否走 LLM 與其溫度。
+# 預設仍開啟 LLM 動態追問，但溫度降到 0，降低同輸入在不同部署產生差異。
+QUESTION_DYNAMIC_USE_LLM = _bool_from_env("QUESTION_DYNAMIC_USE_LLM", True)
+QUESTION_DYNAMIC_TEMPERATURE = _float_from_env("QUESTION_DYNAMIC_TEMPERATURE", 0.0, minimum=0.0, maximum=1.0)
 
 
 IMAGE_SLOT_QUESTION_CONFIG: Dict[str, dict] = {
@@ -3977,7 +4016,7 @@ def _request_mode_dynamic_questions_with_llm(
                         {"role": "system", "content": f"你是{mode_label}需求對齊專家，只輸出 JSON 陣列。"},
                         {"role": "user", "content": instruction},
                     ],
-                    temperature=0.4,
+                    temperature=QUESTION_DYNAMIC_TEMPERATURE,
                     timeout=20,
                 )
                 content = str(completion.choices[0].message.content or "").strip()
@@ -4316,7 +4355,7 @@ def _request_video_dynamic_questions_with_llm(
                         {"role": "system", "content": "你是影片需求對齊專家，只輸出 JSON 陣列。"},
                         {"role": "user", "content": instruction},
                     ],
-                    temperature=0.4,
+                    temperature=QUESTION_DYNAMIC_TEMPERATURE,
                     timeout=20,
                 )
                 content = str(completion.choices[0].message.content or "").strip()
@@ -4488,7 +4527,7 @@ def _build_mode_alignment_questions(
     result.extend(_filter_video_question_candidates(heuristic_candidates, history_questions + result, remaining))
 
     remaining = max(0, target_without_tail - len(result))
-    if remaining > 0 and allow_llm_dynamic:
+    if remaining > 0 and allow_llm_dynamic and QUESTION_DYNAMIC_USE_LLM:
         result.extend(
             _request_mode_dynamic_questions_with_llm(
                 mode_label=mode_title,
@@ -4920,7 +4959,7 @@ def _build_dialogue_alignment_questions(
             covered_facets.add(facet)
 
     remaining = max(0, target_without_tail - len(result))
-    if remaining > 0:
+    if remaining > 0 and QUESTION_DYNAMIC_USE_LLM:
         # 先請 LLM 補一題最關鍵缺口；若失敗再走本地候選。
         llm_dynamic = _request_mode_dynamic_questions_with_llm(
             mode_label="對話需求",
