@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Dict, List, Optional
 
@@ -1897,10 +1898,20 @@ VIDEO_OPTIONAL_SLOT_ORDER: List[str] = [
     "platform_distribution",
 ]
 
+PROMPT_LANGUAGE_QUESTION_KEYWORDS: List[str] = [
+    "提示詞語言",
+    "prompt 語言",
+    "prompt language",
+    "最終提示詞使用什麼語言",
+    "最後輸出的提示詞用哪種語言",
+    "提示詞用哪種語言",
+    "提示詞要用哪種語言",
+]
+
 
 VIDEO_SLOT_KEYWORDS: Dict[str, List[str]] = {
     "video_model": ["生影片模型", "視頻模型", "影片模型", "video model", "sora", "runway", "pika", "seedance", "veo", "kling", "luma"],
-    "prompt_language": ["提示詞語言", "prompt 語言", "prompt language", "最終提示詞使用什麼語言"],
+    "prompt_language": PROMPT_LANGUAGE_QUESTION_KEYWORDS,
     "audience": ["受眾", "哪一類", "目標人群", "給誰看", "觀眾"],
     "video_subtype": ["子類型", "影片屬於", "哪種子類型", "影片類型", "戰鬥/怪物片", "產品宣傳片", "網站/app 展示片", "課程/教育片"],
     "video_style": ["風格", "寫實", "動畫", "cinematic", "生活感"],
@@ -1963,15 +1974,54 @@ VIDEO_GENERAL_DYNAMIC_QUESTIONS: List[dict] = [
     {"text": "有沒有絕對不能出錯或不能出現的畫面元素？", "type": "fill_blank", "options": None},
 ]
 
-VIDEO_TARGET_QUESTIONS_WITHOUT_TAIL = 12
-VIDEO_MAX_TOTAL_QUESTIONS = 13
+def _question_count_from_env(env_key: str, default: int, minimum: int = 3, maximum: int = 20) -> int:
+    raw = str(os.getenv(env_key, "")).strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except Exception:
+        logger.warning("Invalid question count env %s=%r, fallback to %s", env_key, raw, default)
+        return default
+    if value < minimum or value > maximum:
+        logger.warning(
+            "Out-of-range question count env %s=%s (expected %s-%s), fallback to %s",
+            env_key,
+            value,
+            minimum,
+            maximum,
+            default,
+        )
+        return default
+    return value
 
-IMAGE_TARGET_QUESTIONS_WITHOUT_TAIL = 9
-IMAGE_MAX_TOTAL_QUESTIONS = 10
-CODING_TARGET_QUESTIONS_WITHOUT_TAIL = 9
-CODING_MAX_TOTAL_QUESTIONS = 10
-DIALOGUE_TARGET_QUESTIONS_WITHOUT_TAIL = 8
-DIALOGUE_MAX_TOTAL_QUESTIONS = 9
+
+# 問題數量可由環境變數覆蓋，便於不同部署快速調整。
+# 規則：
+# 1) *_FIRST_ROUND = 首輪問題數（不含尾題）
+# 2) *_FOLLOWUP = 點「增加問題」後每輪問題數（不含尾題）
+# 3) 影片/生圖/音樂模式尾題固定存在，因此最大題數 = 目標題數 + 1
+VIDEO_TARGET_FIRST_ROUND = _question_count_from_env("VIDEO_QUESTIONS_FIRST_ROUND", 12)
+VIDEO_TARGET_FOLLOWUP = _question_count_from_env("VIDEO_QUESTIONS_FOLLOWUP", 12)
+VIDEO_MAX_TOTAL_FIRST_ROUND = VIDEO_TARGET_FIRST_ROUND + 1
+VIDEO_MAX_TOTAL_FOLLOWUP = VIDEO_TARGET_FOLLOWUP + 1
+
+IMAGE_TARGET_FIRST_ROUND = _question_count_from_env("IMAGE_QUESTIONS_FIRST_ROUND", 9)
+IMAGE_TARGET_FOLLOWUP = _question_count_from_env("IMAGE_QUESTIONS_FOLLOWUP", 9)
+IMAGE_MAX_TOTAL_FIRST_ROUND = IMAGE_TARGET_FIRST_ROUND + 1
+IMAGE_MAX_TOTAL_FOLLOWUP = IMAGE_TARGET_FOLLOWUP + 1
+
+MUSIC_TARGET_FIRST_ROUND = _question_count_from_env("MUSIC_QUESTIONS_FIRST_ROUND", 12)
+MUSIC_TARGET_FOLLOWUP = _question_count_from_env("MUSIC_QUESTIONS_FOLLOWUP", 12)
+MUSIC_MAX_TOTAL_FIRST_ROUND = MUSIC_TARGET_FIRST_ROUND + 1
+MUSIC_MAX_TOTAL_FOLLOWUP = MUSIC_TARGET_FOLLOWUP + 1
+
+# 編程/對話為核心模式，最低題數強制 10，避免部署環境誤設成 3 題導致品質崩壞。
+CODING_TARGET_FIRST_ROUND = _question_count_from_env("CODING_QUESTIONS_FIRST_ROUND", 10, minimum=10, maximum=20)
+CODING_TARGET_FOLLOWUP = _question_count_from_env("CODING_QUESTIONS_FOLLOWUP", 10, minimum=10, maximum=20)
+
+DIALOGUE_TARGET_FIRST_ROUND = _question_count_from_env("DIALOGUE_QUESTIONS_FIRST_ROUND", 10, minimum=10, maximum=20)
+DIALOGUE_TARGET_FOLLOWUP = _question_count_from_env("DIALOGUE_QUESTIONS_FOLLOWUP", 10, minimum=10, maximum=20)
 
 
 IMAGE_SLOT_QUESTION_CONFIG: Dict[str, dict] = {
@@ -2072,7 +2122,7 @@ IMAGE_OPTIONAL_SLOT_ORDER: List[str] = ["composition", "must_have_elements", "ne
 
 IMAGE_SLOT_KEYWORDS: Dict[str, List[str]] = {
     "image_model": ["生圖模型", "image model", "midjourney", "sdxl", "flux", "dall", "ideogram"],
-    "prompt_language": ["提示詞語言", "prompt 語言", "prompt language", "最終提示詞使用什麼語言"],
+    "prompt_language": PROMPT_LANGUAGE_QUESTION_KEYWORDS,
     "image_goal": ["用在哪", "用途", "投放", "場景", "使用場景"],
     "audience": ["受眾", "哪一類", "給誰看", "目標人群"],
     "visual_style": ["畫風", "質感", "風格", "style"],
@@ -2214,7 +2264,7 @@ CODING_OPTIONAL_SLOT_ORDER: List[str] = [
 
 CODING_SLOT_KEYWORDS: Dict[str, List[str]] = {
     "coding_model": ["編程模型", "coding model", "copilot", "cursor", "gpt", "claude"],
-    "prompt_language": ["提示詞語言", "prompt 語言", "prompt language", "最終提示詞使用什麼語言"],
+    "prompt_language": PROMPT_LANGUAGE_QUESTION_KEYWORDS,
     "project_goal": ["程式任務", "要完成", "目標", "功能", "痛點", "解決什麼問題"],
     "target_user": ["主要服務", "使用者", "目標使用者", "受眾", "被誰使用", "哪一類人使用"],
     "key_features": ["核心功能", "第一版", "mvp", "一定要有", "功能清單", "最不能少"],
@@ -2377,9 +2427,6 @@ DIALOGUE_SLOT_LABELS: Dict[str, str] = {
     "context_anchor": "背景錨點",
     "correction_preference": "糾錯偏好",
 }
-
-MUSIC_TARGET_QUESTIONS_WITHOUT_TAIL = 12
-MUSIC_MAX_TOTAL_QUESTIONS = 13
 
 MUSIC_SLOT_QUESTION_CONFIG: Dict[str, dict] = {
     "music_model": {
@@ -2554,7 +2601,7 @@ MUSIC_OPTIONAL_SLOT_ORDER: List[str] = [
 
 MUSIC_SLOT_KEYWORDS: Dict[str, List[str]] = {
     "music_model": ["音樂模型", "音樂生成模型", "music model", "suno", "udio", "stable audio", "musicgen", "aiva"],
-    "prompt_language": ["提示詞語言", "提示詞本身", "prompt 語言", "prompt language", "最終提示詞使用什麼語言"],
+    "prompt_language": PROMPT_LANGUAGE_QUESTION_KEYWORDS + ["提示詞本身"],
     "music_task": ["音樂成果", "歌曲", "配樂", "bgm", "loop", "作曲", "改編"],
     "use_scene": ["用在哪", "使用場景", "平台", "影片", "遊戲", "短影音", "廣告", "podcast"],
     "audience": ["主要聽眾", "受眾", "給誰聽", "目標人群"],
@@ -4297,6 +4344,9 @@ def _build_video_alignment_questions(
     custom_model: Optional[str] = None,
 ) -> List[dict]:
     history_questions = questions_list or []
+    first_round = not bool(history_questions)
+    target_without_tail = VIDEO_TARGET_FIRST_ROUND if first_round else VIDEO_TARGET_FOLLOWUP
+    max_total = VIDEO_MAX_TOTAL_FIRST_ROUND if first_round else VIDEO_MAX_TOTAL_FOLLOWUP
     asked_slots = _mode_asked_slots_from_questions(history_questions, VIDEO_SLOT_KEYWORDS)
     slot_values = _extract_video_slot_values(
         idea=idea,
@@ -4307,7 +4357,7 @@ def _build_video_alignment_questions(
     result: List[dict] = []
 
     for slot in VIDEO_CORE_SLOT_ORDER:
-        if len(result) >= VIDEO_TARGET_QUESTIONS_WITHOUT_TAIL:
+        if len(result) >= target_without_tail:
             break
         if slot in asked_slots:
             continue
@@ -4315,7 +4365,7 @@ def _build_video_alignment_questions(
             continue
         result.append(_video_slot_question(slot))
 
-    remaining = max(0, VIDEO_TARGET_QUESTIONS_WITHOUT_TAIL - len(result))
+    remaining = max(0, target_without_tail - len(result))
     heuristic_dynamic = _filter_video_question_candidates(
         _video_theme_questions_from_idea(idea, slot_values=slot_values),
         history_questions + result,
@@ -4324,7 +4374,7 @@ def _build_video_alignment_questions(
     result.extend(heuristic_dynamic)
 
     llm_dynamic: List[dict] = []
-    remaining = max(0, VIDEO_TARGET_QUESTIONS_WITHOUT_TAIL - len(result))
+    remaining = max(0, target_without_tail - len(result))
     if remaining > 0:
         llm_dynamic = _request_video_dynamic_questions_with_llm(
             idea=idea,
@@ -4337,7 +4387,7 @@ def _build_video_alignment_questions(
         )
         result.extend(llm_dynamic)
 
-    remaining = max(0, VIDEO_TARGET_QUESTIONS_WITHOUT_TAIL - len(result))
+    remaining = max(0, target_without_tail - len(result))
     optional_candidates = [
         _video_slot_question(slot)
         for slot in VIDEO_OPTIONAL_SLOT_ORDER
@@ -4357,13 +4407,13 @@ def _build_video_alignment_questions(
         "options": None,
     }
     if result and result[-1].get("type") != "narrative":
-        if len(result) >= VIDEO_MAX_TOTAL_QUESTIONS:
+        if len(result) >= max_total:
             result[-1] = tail_question
         else:
             result.append(tail_question)
 
-    if len(result) > VIDEO_MAX_TOTAL_QUESTIONS:
-        result = result[:VIDEO_MAX_TOTAL_QUESTIONS]
+    if len(result) > max_total:
+        result = result[:max_total]
         if result[-1].get("type") != "narrative":
             result[-1] = tail_question
 
@@ -4494,6 +4544,9 @@ def _build_image_alignment_questions(
     custom_base_url: Optional[str] = None,
     custom_model: Optional[str] = None,
 ) -> List[dict]:
+    first_round = not bool(questions_list or [])
+    target_without_tail = IMAGE_TARGET_FIRST_ROUND if first_round else IMAGE_TARGET_FOLLOWUP
+    max_total = IMAGE_MAX_TOTAL_FIRST_ROUND if first_round else IMAGE_MAX_TOTAL_FOLLOWUP
     expertise = _infer_image_user_expertise(
         idea=idea,
         questions_list=questions_list,
@@ -4534,8 +4587,8 @@ def _build_image_alignment_questions(
         heuristic_candidates=_image_context_questions_from_idea(idea, expertise=expertise, slot_values=slot_values),
         llm_focus_hint=focus_hint,
         llm_avoid_slots_hint="生圖模型、提示詞語言、用途、主體、比例",
-        target_without_tail=IMAGE_TARGET_QUESTIONS_WITHOUT_TAIL,
-        max_total=IMAGE_MAX_TOTAL_QUESTIONS,
+        target_without_tail=target_without_tail,
+        max_total=max_total,
         tail_if_story_missing="最後補充：還有沒有你特別喜歡或絕對不能出現的畫面風格？",
         tail_if_story_present="最後補充：還有沒有你希望我們再強化的細節（例如材質、情緒、鏡頭感）？",
         include_assessment=False,
@@ -4557,6 +4610,9 @@ def _build_music_alignment_questions(
     custom_base_url: Optional[str] = None,
     custom_model: Optional[str] = None,
 ) -> List[dict]:
+    first_round = not bool(questions_list or [])
+    target_without_tail = MUSIC_TARGET_FIRST_ROUND if first_round else MUSIC_TARGET_FOLLOWUP
+    max_total = MUSIC_MAX_TOTAL_FIRST_ROUND if first_round else MUSIC_MAX_TOTAL_FOLLOWUP
     expertise = _infer_music_user_expertise(
         idea=idea,
         questions_list=questions_list,
@@ -4620,8 +4676,8 @@ def _build_music_alignment_questions(
         heuristic_candidates=_music_context_questions_from_idea(idea, expertise=expertise, slot_values=slot_values),
         llm_focus_hint=focus_hint,
         llm_avoid_slots_hint="音樂模型、提示詞語言（非歌詞語言）、成果類型、場景、受眾、曲風、情緒、時長",
-        target_without_tail=MUSIC_TARGET_QUESTIONS_WITHOUT_TAIL,
-        max_total=MUSIC_MAX_TOTAL_QUESTIONS,
+        target_without_tail=target_without_tail,
+        max_total=max_total,
         tail_if_story_missing="最後補充：還有沒有你想指定的參考歌曲、版權邊界或必避元素？",
         tail_if_story_present="最後補充：還有沒有你想再強化的段落、轉場或聽感細節？",
         include_assessment=False,
@@ -4669,8 +4725,8 @@ def _build_coding_alignment_questions(
     has_history = bool(history_questions) or bool(answers_list or [])
     first_round = not bool(history_questions)
     asked_slots = _mode_asked_slots_from_questions(history_questions, CODING_SLOT_KEYWORDS)
-    target_without_tail = 10
-    max_total = 10
+    target_without_tail = CODING_TARGET_FIRST_ROUND if first_round else CODING_TARGET_FOLLOWUP
+    max_total = target_without_tail
     slot_values = _extract_mode_slot_values(
         idea=idea,
         slot_order=CODING_SLOT_ORDER,
@@ -4802,6 +4858,7 @@ def _build_dialogue_alignment_questions(
 ) -> List[dict]:
     dynamic_slot_config = _build_dialogue_slot_question_config(idea)
     history_questions = questions_list or []
+    first_round = not bool(history_questions)
     asked_slots = _mode_asked_slots_from_questions(history_questions, DIALOGUE_SLOT_KEYWORDS)
     slot_values = _extract_mode_slot_values(
         idea=idea,
@@ -4812,18 +4869,20 @@ def _build_dialogue_alignment_questions(
         feedback=feedback,
     )
     result: List[dict] = []
-    has_history = bool((questions_list or []) and (answers_list or []))
-    target_without_tail = 1 if has_history else 3
+    has_history = bool(history_questions or (answers_list or []) or str(feedback or "").strip())
+    target_without_tail = DIALOGUE_TARGET_FIRST_ROUND if first_round else DIALOGUE_TARGET_FOLLOWUP
+    max_total = target_without_tail
 
-    # 只保留兩題必要固定題：模型與提示詞語言。
-    for slot in ["dialogue_model", "prompt_language"]:
-        if slot in asked_slots:
-            continue
-        if str(slot_values.get(slot) or "").strip():
-            continue
-        result.append(_mode_slot_question(slot, dynamic_slot_config))
-        if len(result) >= target_without_tail:
-            break
+    # 固定題只在第一輪提問，避免後續「增加問題」時重複出現。
+    if first_round:
+        for slot in ["dialogue_model", "prompt_language"]:
+            if slot in asked_slots:
+                continue
+            if str(slot_values.get(slot) or "").strip():
+                continue
+            result.append(_mode_slot_question(slot, dynamic_slot_config))
+            if len(result) >= target_without_tail:
+                break
 
     # 已覆蓋面向，避免重複追問。
     covered_facets: set[str] = set()
@@ -4878,7 +4937,7 @@ def _build_dialogue_alignment_questions(
             custom_base_url=custom_base_url,
             custom_model=custom_model,
         )
-        result.extend(_filter_video_question_candidates(llm_dynamic, result, remaining))
+        result.extend(_filter_video_question_candidates(llm_dynamic, history_questions + result, remaining))
 
     remaining = max(0, target_without_tail - len(result))
     if remaining > 0:
@@ -4892,12 +4951,40 @@ def _build_dialogue_alignment_questions(
                 fallback_candidates,
                 history_questions + result,
                 remaining,
-                dedupe_by_topic=False,
+                dedupe_by_topic=True,
             )
         )
 
-    if len(result) > target_without_tail:
-        result = result[:target_without_tail]
+    remaining = max(0, target_without_tail - len(result))
+    if remaining > 0:
+        backfill_slots = [
+            "interaction_goal",
+            "context_anchor",
+            "scope_depth",
+            "desired_output",
+            "target_audience",
+            "tone_boundary",
+            "turn_rules",
+            "success_criteria",
+            "correction_preference",
+            "interaction_role",
+        ]
+        backfill_candidates = [
+            _mode_slot_question(slot, dynamic_slot_config)
+            for slot in backfill_slots
+            if slot not in asked_slots and not str(slot_values.get(slot) or "").strip()
+        ]
+        result.extend(
+            _filter_video_question_candidates(
+                backfill_candidates,
+                history_questions + result,
+                remaining,
+                dedupe_by_topic=True,
+            )
+        )
+
+    if len(result) > max_total:
+        result = result[:max_total]
 
     for idx, q in enumerate(result, start=1):
         q["id"] = f"q{idx}"
@@ -6567,7 +6654,7 @@ def _qa_topic_key(question_text: str) -> str:
         "music_model": ["音樂模型", "音樂生成模型", "music model", "suno", "udio", "stable audio", "musicgen", "aiva"],
         "coding_model": ["ai 編程模型", "編程模型", "coding model", "copilot", "cursor", "claude", "gpt 系列"],
         "dialogue_model": ["對話模型", "dialogue model", "聊天模型", "assistant model"],
-        "prompt_language": ["提示詞語言", "提示詞本身", "prompt 語言", "prompt language", "最終提示詞使用什麼語言"],
+        "prompt_language": PROMPT_LANGUAGE_QUESTION_KEYWORDS + ["提示詞本身"],
         "music_task": ["音樂成果", "歌曲", "配樂", "bgm", "loop", "作曲", "改編"],
         "use_scene": ["用在哪", "使用場景", "影片", "遊戲", "短影音", "廣告", "podcast"],
         "genre_style": ["曲風", "音樂風格", "genre", "style"],
