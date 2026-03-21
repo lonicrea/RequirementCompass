@@ -3030,9 +3030,9 @@ def _extract_coding_focus_subject(idea: str) -> str:
 def _build_coding_slot_question_config(idea: str) -> Dict[str, dict]:
     subject = _extract_coding_focus_subject(idea)
     config = {key: dict(value) for key, value in CODING_SLOT_QUESTION_CONFIG.items()}
-    config["project_goal"]["text"] = f"圍繞「{subject}」，你最想先解決哪個使用者痛點？"
-    config["target_user"]["text"] = f"「{subject}」最主要會被哪一類人使用？"
-    config["final_vision"]["text"] = f"你期待「{subject}」最後成品長什麼樣子？用一句話描述。"
+    config["project_goal"]["text"] = f"先談目標：做「{subject}」你最想先解掉哪個痛點？"
+    config["target_user"]["text"] = f"「{subject}」最主要會被哪一群人使用？"
+    config["final_vision"]["text"] = f"你期待「{subject}」最後成品看起來會是什麼樣子？"
     config["key_features"]["text"] = f"如果先上第一版，「{subject}」最不能少的 3 到 5 個功能是什麼？"
     return config
 
@@ -3780,8 +3780,10 @@ def _coding_dynamic_followup_candidates(
         add(candidates, "user", f"誰最常會用到「{subject}」？他現在通常卡在哪一步？")
         add(candidates, "moment", "假設新使用者只願意停留 30 秒，你希望他完成哪個動作就算成功？")
         add(candidates, "scope", "如果第一版只能聚焦最核心功能，你想先做哪三件事？")
+        add(candidates, "value", "你最希望使用者在第一次用完後，立刻感受到哪個價值？")
         add(candidates, "success", "到你驗收時，看到哪兩個結果你會說「可以上線了」？")
         add(candidates, "risk", "你現在最擔心哪種失敗情境？（流程卡住、資料錯、太慢、或回滾困難）")
+        add(candidates, "critical_step", "整個流程裡最不能出錯的那一步是什麼？為什麼它最關鍵？")
         add(candidates, "reference", "有沒有你心中做得不錯的參考產品？想借鏡哪一點、避開哪一點？")
 
     if any(token in lowered for token in ["學習", "教學", "課程", "教育"]):
@@ -4757,43 +4759,8 @@ def _build_coding_alignment_questions(
             result.append(candidate)
             _mark_seen(text)
 
-    # 優先讓 LLM 依上下文一次產出一批問題（每輪最多 10 題）。
-    remaining = max(0, target_without_tail - len(result))
-    if remaining > 0:
-        avoid_hints: List[str] = []
-        if "coding_model" in asked_slots or str(slot_values.get("coding_model") or "").strip():
-            avoid_hints.append("編程模型")
-        if "prompt_language" in asked_slots or str(slot_values.get("prompt_language") or "").strip():
-            avoid_hints.append("提示詞語言")
-        if first_round:
-            avoid_hints.append("完全照抄使用者原句，不延伸需求")
-
-        llm_dynamic = _request_mode_dynamic_questions_with_llm(
-            mode_label="編程需求",
-            idea=idea,
-            slot_values=slot_values,
-            existing_questions=history_questions + result,
-            max_questions=remaining,
-            focus_hint=(
-                "本輪目標是補齊 10 題左右的高價值追問。"
-                "優先問產品願景、核心使用者、關鍵流程、MVP 優先級、成功標準與高風險邊界。"
-                "提問要像真人產品/工程討論，不要模板語氣。"
-            ),
-            avoid_slots_hint="、".join(avoid_hints) if avoid_hints else "已問過的題目",
-            custom_api_key=custom_api_key,
-            custom_base_url=custom_base_url,
-            custom_model=custom_model,
-        )
-        for item in llm_dynamic:
-            text = str(item.get("text", "")).strip()
-            if not text or _is_seen(text):
-                continue
-            result.append(item)
-            _mark_seen(text)
-            if len(result) >= target_without_tail:
-                break
-
-    # LLM 題量不足時，用本地語境候選補齊（保留去重）。
+    # 編程模式固定使用本地「需求推理題庫」補齊，避免 LLM 回退成模板題。
+    # 這裡刻意不直接走通用 LLM 追問，以提高線上結果的一致性與可控性。
     remaining = max(0, target_without_tail - len(result))
     if remaining > 0:
         fallback_candidates = _coding_dynamic_followup_candidates(
