@@ -9476,6 +9476,7 @@ def _build_final_prompt_by_classification(
     dialogue_mode = primary_code == "10"
     image_question_mode = _is_image_question_set(questions)
     music_question_mode = _is_music_question_set(questions)
+    dialogue_question_mode = _is_dialogue_question_set(questions)
 
     # If user explicitly selected one mode, force it and ignore keyword cross-trigger.
     if selected_mode:
@@ -9495,7 +9496,12 @@ def _build_final_prompt_by_classification(
             music_mode = _is_music_ai_type(selected_ai_types) or _is_music_mode_from_idea(idea) or music_question_mode
         if not coding_mode:
             coding_mode = _is_coding_ai_type(selected_ai_types) or _is_coding_mode_from_idea(idea)
-        dialogue_mode = dialogue_mode or _is_dialogue_ai_type(selected_ai_types) or _is_dialogue_mode_from_idea(idea)
+        dialogue_mode = (
+            dialogue_mode
+            or _is_dialogue_ai_type(selected_ai_types)
+            or _is_dialogue_mode_from_idea(idea)
+            or dialogue_question_mode
+        )
 
         # Resolve cross-trigger when the request text contains mixed keywords:
         # question set signal is more reliable than raw keyword hit.
@@ -9849,6 +9855,23 @@ def _is_music_question_set(questions: List[dict]) -> bool:
         "歌詞",
         "bpm",
         "音樂長度",
+    ]
+    for token in markers:
+        if token.lower() in text:
+            hit += 1
+    return hit >= 2
+
+
+def _is_dialogue_question_set(questions: List[dict]) -> bool:
+    text = " ".join(str((item or {}).get("text", "")) for item in (questions or [])).lower()
+    hit = 0
+    markers = [
+        "這次打算用哪個對話模型",
+        "最後輸出的提示詞用哪種語言",
+        "你希望回答到哪個深度",
+        "你希望我最後整理成哪種形式",
+        "這份內容主要給誰看",
+        "不能踩的邊界",
     ]
     for token in markers:
         if token.lower() in text:
