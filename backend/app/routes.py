@@ -24,6 +24,7 @@ from app.llm import (
     FINAL_PROMPT_USE_LLM,
     QUESTION_DYNAMIC_USE_LLM,
     _qa_topic_key,
+    analyze_requirements_strict,
     classify_demand,
     generate_final_prompt_strict,
     generate_questions,
@@ -31,6 +32,8 @@ from app.llm import (
 )
 from app.models import Round, Session as SessionModel
 from app.schemas import (
+    AnalyzeRequirementsRequest,
+    AnalyzeRequirementsResponse,
     AppendQuestionsRequest,
     AppendQuestionsResponse,
     ContinueFeedbackRequest,
@@ -302,6 +305,56 @@ def api_append_questions(payload: AppendQuestionsRequest, db: Session = Depends(
 
         add_token_usage(db, tokens=_estimate_tokens(sm.idea, merged_questions))
         return {"session_id": sm.id, "questions": merged_questions}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/analyze-requirements", response_model=AnalyzeRequirementsResponse)
+def api_analyze_requirements(payload: AnalyzeRequirementsRequest, db: Session = Depends(get_db)):
+    try:
+        limit_resp = _token_limit_response(db)
+        if limit_resp:
+            return limit_resp
+
+        if not payload.session_id:
+            return JSONResponse({"error": "會話 ID 不能為空"}, status_code=400)
+
+        sm = db.get(SessionModel, payload.session_id)
+        if not sm:
+            return JSONResponse({"error": "無效的會話 ID"}, status_code=400)
+
+        questions = json.loads(sm.questions or "[]")
+        answers = json.loads(sm.answers or "[]")
+        if not answers:
+            return JSONResponse({"error": "尚未有可用回答，請先提交答案"}, status_code=400)
+
+        historical_questions: List[dict] = []
+        previous_rounds = (
+            db.query(Round)
+            .filter(Round.session_id == sm.id)
+            .order_by(Round.round_number.asc())
+            .all()
+        )
+        for record in previous_rounds:
+            try:
+                round_questions = json.loads(record.questions)
+                round_answers = json.loads(record.answers)
+            except Exception:
+                continue
+            aligned_count = min(len(round_questions or []), len(round_answers or []))
+            if aligned_count > 0:
+                historical_questions.extend((round_questions or [])[:aligned_count])
+
+        summary = analyze_requirements_strict(
+            idea=sm.idea,
+            questions=historical_questions + questions,
+            answers=answers,
+            custom_api_key=payload.custom_api.api_key if payload.custom_api else None,
+            custom_base_url=payload.custom_api.base_url if payload.custom_api else None,
+            custom_model=payload.custom_api.model if payload.custom_api else None,
+        )
+        add_token_usage(db, tokens=_estimate_tokens(sm.idea, questions, answers))
+        return {"session_id": sm.id, "requirement_summary": summary}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 

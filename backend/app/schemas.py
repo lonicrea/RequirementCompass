@@ -91,6 +91,16 @@ class GenerateFinalPromptResponse(BaseModel):
     final_prompt: str
 
 
+class AnalyzeRequirementsRequest(BaseModel):
+    session_id: str
+    custom_api: Optional[CustomAPIConfig] = None
+
+
+class AnalyzeRequirementsResponse(BaseModel):
+    session_id: str
+    requirement_summary: dict
+
+
 class GeneratePdfRequest(BaseModel):
     session_id: str
 

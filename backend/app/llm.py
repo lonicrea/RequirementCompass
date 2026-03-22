@@ -2066,6 +2066,15 @@ QUESTION_DYNAMIC_TEMPERATURE = _float_from_env("QUESTION_DYNAMIC_TEMPERATURE", 0
 # 預設關閉這層隨機性，改用程式內的確定性生成與清理流程，確保同樣輸入得到同樣輸出。
 FINAL_PROMPT_USE_LLM = _bool_from_env("FINAL_PROMPT_USE_LLM", False)
 
+# 三階段流程：
+# 1) 問題生成（Question AI）
+# 2) 需求分析（Analysis AI）
+# 3) 最終提示詞生成（Prompt AI）
+# 對於四個核心模式（對話 / 編程 / 生圖 / 音樂），分析與最終生成預設啟用 LLM，
+# 若外部模型不可用，再退回程式內的保守 deterministic 流程。
+ANALYSIS_STAGE_USE_LLM = _bool_from_env("ANALYSIS_STAGE_USE_LLM", True)
+PROMPT_STAGE_USE_LLM = _bool_from_env("PROMPT_STAGE_USE_LLM", True)
+
 
 IMAGE_SLOT_QUESTION_CONFIG: Dict[str, dict] = {
     "image_model": {
@@ -5892,29 +5901,13 @@ def _rewrite_prompt_by_user_method(
     return _natural_prompt_fallback(source, prompt_language)
 
 
-def generate_final_prompt_strict(
+def _determine_generation_mode(
     idea: str,
     questions: List[dict],
-    answers: List[dict],
-    custom_api_key: Optional[str] = None,
-    custom_base_url: Optional[str] = None,
-    custom_model: Optional[str] = None,
-) -> str:
-    profile = _extract_profile_from_idea(idea)
-    demand_classification = profile.get("demand_classification") if isinstance(profile.get("demand_classification"), dict) else {}
+    demand_classification: dict,
+    profile: Dict[str, object],
+) -> tuple[str, str, str]:
     primary_code, sub_codes = _classification_codes(demand_classification)
-    if not primary_code:
-        demand_classification = classify_demand(
-            idea=idea,
-            user_identity=profile.get("user_identity"),
-            language_region=profile.get("language_region"),
-            existing_resources=profile.get("existing_resources"),
-            custom_api_key=custom_api_key,
-            custom_base_url=custom_base_url,
-            custom_model=custom_model,
-        )
-        primary_code, sub_codes = _classification_codes(demand_classification)
-
     selected_ai_types = profile.get("selected_ai_types") if isinstance(profile.get("selected_ai_types"), list) else []
     selected_mode = _selected_mode_from_ai_types(selected_ai_types)
     mode_hint = selected_mode or (
@@ -5924,17 +5917,516 @@ def generate_final_prompt_strict(
         "music" if (primary_code == "5" and (sub_codes[0].startswith("5.3") if sub_codes else False)) else
         "general"
     )
+    if _is_image_question_set(questions) or _is_image_ai_type(selected_ai_types) or _is_image_mode_from_idea(idea):
+        mode_hint = "image"
+        primary_code = "5"
+        sub_codes = ["5.6"]
+    elif _is_music_question_set(questions) or _is_music_ai_type(selected_ai_types) or _is_music_mode_from_idea(idea):
+        mode_hint = "music"
+        primary_code = "5"
+        sub_codes = ["5.3"]
+    elif _is_dialogue_question_set(questions) or _is_dialogue_ai_type(selected_ai_types) or _is_dialogue_mode_from_idea(idea):
+        mode_hint = "dialogue"
+        primary_code = primary_code or "10"
+        if not sub_codes:
+            sub_codes = ["10.1"]
+    elif _is_coding_ai_type(selected_ai_types) or _is_coding_mode_from_idea(idea):
+        mode_hint = "coding"
+        primary_code = "9"
+        if not sub_codes:
+            sub_codes = ["9.1"]
+    return mode_hint, primary_code, (sub_codes[0] if sub_codes else "")
 
-    base_prompt = _build_final_prompt_by_classification(
+
+def _summary_list_from_text(value: object, fallback: Optional[List[str]] = None, limit: int = 5) -> List[str]:
+    raw = _humanize_text(str(value or "")).strip()
+    items = [seg.strip("。；; \t\r\n") for seg in re.split(r"[；;\n]+", raw) if seg and seg.strip()]
+    deduped: List[str] = []
+    for item in items:
+        if item and item not in deduped and not _is_placeholder_like(item):
+            deduped.append(item)
+        if len(deduped) >= limit:
+            break
+    if deduped:
+        return deduped
+    return list((fallback or [])[:limit])
+
+
+def _force_prompt_role_intro(prompt_text: str, role: str, prompt_language: str) -> str:
+    text = _strip_code_fence(prompt_text)
+    target_role = _humanize_text(str(role or "")).strip()
+    if not text or not target_role:
+        return text
+    intro = _render_role_intro(target_role, prompt_language)
+    end = "." if _is_english_language(prompt_language) else "。"
+    if re.match(r"^\s*(?:你是|you are|作為一[名位]|身為一[名位]|as an?)", text, flags=re.IGNORECASE):
+        normalized = _normalize_role_sentence(text, "", "", prompt_language)
+        leading = re.match(r"^\s*(?:你是|you are)\s*([^。！？!,.，\n]{1,120})", normalized, flags=re.IGNORECASE)
+        if leading:
+            tail = normalized[leading.end():].lstrip("。.!！?？,， ")
+            return f"{intro}{end} {tail}".strip()
+    return f"{intro}{end} {text}".strip()
+
+
+def _synthesize_image_solution_brief(
+    idea: str,
+    fields: Dict[str, str],
+    questions: List[dict],
+    answers: List[dict],
+) -> Dict[str, object]:
+    slot_values = _extract_image_slot_values(idea=idea, questions_list=questions, answers_list=answers)
+    return {
+        "image_model": _extract_image_model_preference(questions, answers, idea),
+        "image_goal": slot_values.get("image_goal") or "社群貼文",
+        "target_audience": slot_values.get("audience") or "目標受眾",
+        "visual_style": slot_values.get("visual_style") or "clean modern visual style",
+        "main_subject": slot_values.get("main_subject") or _extract_image_subject(fields.get("task_goal", "主題")),
+        "scene": _extract_image_answer_by_question_tokens(questions, answers, ["場景", "背景", "地點"]) or "clean modern environment",
+        "composition": slot_values.get("composition") or "rule of thirds composition with clear focal hierarchy",
+        "must_have": _extract_image_answer_by_question_tokens(questions, answers, ["必須出現", "logo", "品牌色", "元素"]) or "",
+        "negative_prompt": _extract_image_answer_by_question_tokens(questions, answers, ["避免", "禁忌", "negative"]) or "",
+        "aspect_ratio": slot_values.get("aspect_ratio") or "1:1",
+    }
+
+
+def _refine_requirement_summary_with_llm(
+    summary: Dict[str, object],
+    idea: str,
+    questions: List[dict],
+    answers: List[dict],
+    custom_api_key: Optional[str] = None,
+    custom_base_url: Optional[str] = None,
+    custom_model: Optional[str] = None,
+) -> Dict[str, object]:
+    if not ANALYSIS_STAGE_USE_LLM:
+        return summary
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    if not attempts:
+        return summary
+
+    qa_lines = _qa_summary_lines(questions, answers, limit=12)
+    for api_key, base_url, model in attempts:
+        try:
+            client = _client(api_key, base_url)
+            instruction = f"""
+你是需求分析 AI，只負責把使用者的需求整理成高品質需求摘要 JSON。
+
+規則：
+1. 僅輸出 JSON，不要額外說明。
+2. 保留 mode、primary_code、sub_code、prompt_language、fields、mode_solution。
+3. 請優化下列頂層欄位，使其更貼近使用者真實需求：role、task_goal、target_audience、context_anchor、output_requirement、constraints、success_criteria、content_focus、workflow、assumptions。
+4. constraints、success_criteria、content_focus、workflow、assumptions 必須是陣列。
+5. 禁止輸出「未提供、待確認、TBD、N/A」；資訊不足時改用保守、可執行的預設。
+6. 需求摘要必須服務於下一階段的最終提示詞生成，不是寫給人看的 PRD。
+
+[原始需求]
+{_core_idea_from_idea(idea)}
+
+[問答摘要]
+{chr(10).join(qa_lines) if qa_lines else "- 無"}
+
+[當前需求摘要 JSON]
+{json.dumps(summary, ensure_ascii=False)}
+"""
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "你是高品質需求分析器，只輸出 JSON。"},
+                    {"role": "user", "content": instruction},
+                ],
+                temperature=0.1,
+                timeout=25,
+            )
+            data = _extract_json_payload(str(completion.choices[0].message.content or "").strip())
+            if not isinstance(data, dict):
+                continue
+            merged = dict(summary)
+            for key in ["role", "task_goal", "target_audience", "context_anchor", "output_requirement"]:
+                value = _humanize_text(str(data.get(key) or "")).strip()
+                if value and not _is_placeholder_like(value):
+                    merged[key] = value
+            for key in ["constraints", "success_criteria", "content_focus", "workflow", "assumptions"]:
+                values = data.get(key)
+                if isinstance(values, list):
+                    cleaned = [str(item).strip() for item in values if str(item).strip() and not _is_placeholder_like(str(item))]
+                    if cleaned:
+                        merged[key] = cleaned[:5]
+            return merged
+        except Exception:
+            logger.exception("requirement summary refinement attempt failed")
+            continue
+    return summary
+
+
+def analyze_requirements_strict(
+    idea: str,
+    questions: List[dict],
+    answers: List[dict],
+    custom_api_key: Optional[str] = None,
+    custom_base_url: Optional[str] = None,
+    custom_model: Optional[str] = None,
+) -> Dict[str, object]:
+    profile = _extract_profile_from_idea(idea)
+    demand_classification = profile.get("demand_classification") if isinstance(profile.get("demand_classification"), dict) else {}
+    if not _classification_codes(demand_classification)[0]:
+        demand_classification = classify_demand(
+            idea=idea,
+            user_identity=profile.get("user_identity"),
+            language_region=profile.get("language_region"),
+            existing_resources=profile.get("existing_resources"),
+            custom_api_key=custom_api_key,
+            custom_base_url=custom_base_url,
+            custom_model=custom_model,
+        )
+    mode, primary_code, key_sub = _determine_generation_mode(idea, questions, demand_classification, profile)
+    fields = _extract_prompt_fields(idea, questions, answers)
+    fields = _apply_prompt_field_defaults(fields, primary_code, key_sub)
+    prompt_language = _extract_prompt_language_preference(questions, answers, profile)
+    execution_focus = _humanize_text(_classification_execution_focus(primary_code))
+    method_rule = _humanize_text(_subcategory_method_text(key_sub))
+    qa_lines = _qa_summary_lines(questions, answers, limit=10)
+
+    mode_solution: Dict[str, object] = {}
+    assumptions: List[str] = []
+    target_audience = ""
+    context_anchor = _humanize_text(_core_idea_from_idea(idea))
+    content_focus: List[str] = []
+    workflow: List[str] = []
+
+    if mode == "coding":
+        fields, assumptions = _augment_coding_prompt_fields(fields=fields, idea=idea, questions=questions, answers=answers)
+        mode_solution = _synthesize_coding_solution_brief(
+            idea=idea,
+            fields=fields,
+            questions=questions,
+            answers=answers,
+            custom_api_key=custom_api_key,
+            custom_base_url=custom_base_url,
+            custom_model=custom_model,
+        )
+        target_audience = _humanize_text(str(mode_solution.get("target_users") or "")) or "目標使用者"
+        context_anchor = _humanize_text(str(mode_solution.get("product_positioning") or context_anchor))
+        content_focus = _summary_list_from_text(
+            "；".join(str(item) for item in (mode_solution.get("mvp_features") or [])),
+            fallback=["核心流程", "資料流與 API 契約", "錯誤處理與驗收標準"],
+        )
+        workflow = _summary_list_from_text(
+            "；".join(str(item) for item in (mode_solution.get("delivery_plan") or [])),
+            fallback=["先定義產品主流程", "再拆系統架構與資料模型", "最後輸出可直接開發的工程任務"],
+        )
+    elif mode == "dialogue":
+        signal = _collect_dialogue_signal(questions, answers)
+        fields["role"] = _derive_dialogue_expert_role(primary_code, key_sub, idea, fields)
+        mode_solution = _synthesize_dialogue_solution_brief(
+            idea=idea,
+            fields=fields,
+            questions=questions,
+            answers=answers,
+            custom_api_key=custom_api_key,
+            custom_base_url=custom_base_url,
+            custom_model=custom_model,
+        )
+        target_audience = _humanize_text(signal.get("target_audience") or mode_solution.get("target_audience") or "") or "一般使用者"
+        context_anchor = _humanize_text(signal.get("context_anchor") or mode_solution.get("context_anchor") or context_anchor)
+        content_focus = _derive_dialogue_content_focus(signal, idea, fields)
+        workflow = _derive_dialogue_research_workflow(primary_code, key_sub, idea, fields)
+        assumptions = [str(item).strip() for item in (mode_solution.get("assumptions") or []) if str(item).strip()]
+    elif mode == "music":
+        fields["role"] = "資深音樂製作顧問"
+        if _is_placeholder_like(fields.get("output_format", "")):
+            fields["output_format"] = "可直接投餵音樂模型的提示詞（主提示詞、negative prompt、output settings）"
+        if _is_placeholder_like(fields.get("acceptance", "")):
+            fields["acceptance"] = "生成結果需符合曲風、情緒、配器、時長與使用場景"
+        mode_solution = _synthesize_music_solution_brief(
+            idea=idea,
+            fields=fields,
+            questions=questions,
+            answers=answers,
+            custom_api_key=custom_api_key,
+            custom_base_url=custom_base_url,
+            custom_model=custom_model,
+        )
+        target_audience = _humanize_text(str(mode_solution.get("target_audience") or "")) or "目標聽眾"
+        context_anchor = _humanize_text(str(mode_solution.get("use_scene") or context_anchor))
+        content_focus = _summary_list_from_text(
+            "；".join(
+                [
+                    str(mode_solution.get("style_profile") or ""),
+                    str(mode_solution.get("arrangement_profile") or ""),
+                    str(mode_solution.get("lyrics_profile") or ""),
+                ]
+            ),
+            fallback=["曲風與情緒", "配器與節奏", "人聲與歌詞設定"],
+        )
+        workflow = _summary_list_from_text(
+            "；".join(str(item) for item in (mode_solution.get("workflow") or [])),
+            fallback=["先鎖定場景與曲風", "再明確配器與結構", "最後輸出可直接投餵模型的提示詞"],
+        )
+    elif mode == "image":
+        fields["role"] = "資深圖像提示詞設計師"
+        fields["task_goal"] = _core_idea_from_idea(idea) or fields.get("task_goal", "")
+        fields["output_format"] = "可直接投餵生圖模型的提示詞（[Model Target]、[Core Prompt]、[Negative Prompt]、[Output Settings]）"
+        if _is_placeholder_like(fields.get("constraints", "")) or "首頁改版方案" in str(fields.get("constraints") or ""):
+            fields["constraints"] = "以使用者指定的主體、場景、風格、構圖、光線、色彩與比例為準，缺值用保守視覺預設補齊"
+        if _is_placeholder_like(fields.get("acceptance", "")) or "首頁可讀性" in str(fields.get("acceptance") or ""):
+            fields["acceptance"] = "主體清楚、風格一致、構圖穩定、用途匹配，且可直接貼到生圖模型使用"
+        mode_solution = _synthesize_image_solution_brief(idea=idea, fields=fields, questions=questions, answers=answers)
+        target_audience = _humanize_text(str(mode_solution.get("target_audience") or "")) or "目標受眾"
+        context_anchor = _humanize_text(str(mode_solution.get("image_goal") or context_anchor))
+        content_focus = _summary_list_from_text(
+            "；".join(
+                [
+                    str(mode_solution.get("main_subject") or ""),
+                    str(mode_solution.get("scene") or ""),
+                    str(mode_solution.get("visual_style") or ""),
+                    str(mode_solution.get("composition") or ""),
+                ]
+            ),
+            fallback=["主體", "場景", "風格", "構圖與光線"],
+        )
+        workflow = ["先釐清主體與用途", "再補齊風格、構圖、光線與比例", "最後輸出可直接投餵模型的提示詞"]
+    else:
+        target_audience = "目標使用者"
+        content_focus = ["核心目標", "限制條件", "可執行輸出"]
+        workflow = ["先釐清需求", "再整理限制", "最後輸出可執行提示詞"]
+
+    summary = {
+        "analysis_version": "v2-three-stage",
+        "mode": mode,
+        "primary_code": primary_code,
+        "sub_code": key_sub,
+        "prompt_language": prompt_language,
+        "role": (
+            "資深軟體工程師" if mode == "coding" else
+            fields.get("role", "")
+        ),
+        "task_goal": _humanize_text(fields.get("task_goal", "")),
+        "target_audience": target_audience,
+        "context_anchor": context_anchor,
+        "output_requirement": _humanize_text(fields.get("output_format", "")),
+        "constraints": _summary_list_from_text(fields.get("constraints", ""), fallback=["遵守已提供限制並保持結果可執行"], limit=5),
+        "success_criteria": _summary_list_from_text(fields.get("acceptance", ""), fallback=["結果符合任務目標與限制，且可直接交給下游 AI 執行"], limit=5),
+        "content_focus": content_focus[:5],
+        "workflow": workflow[:5],
+        "assumptions": assumptions[:5],
+        "execution_focus": execution_focus,
+        "method_rule": method_rule,
+        "qa_facts": qa_lines,
+        "fields": fields,
+        "mode_solution": mode_solution,
+    }
+    return _refine_requirement_summary_with_llm(
+        summary=summary,
         idea=idea,
         questions=questions,
         answers=answers,
-        demand_classification=demand_classification,
         custom_api_key=custom_api_key,
         custom_base_url=custom_base_url,
         custom_model=custom_model,
     )
-    prompt_language = _extract_prompt_language_preference(questions, answers, profile)
+
+
+def _generate_coding_or_dialogue_prompt_from_summary_with_llm(
+    summary: Dict[str, object],
+    custom_api_key: Optional[str] = None,
+    custom_base_url: Optional[str] = None,
+    custom_model: Optional[str] = None,
+) -> str:
+    if not PROMPT_STAGE_USE_LLM:
+        return ""
+    attempts = _build_llm_attempts(
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+        include_openai_fallback=True,
+        include_qwen_fallback=True,
+    )
+    if not attempts:
+        return ""
+    mode = str(summary.get("mode") or "general")
+    prompt_language = _normalize_prompt_language(str(summary.get("prompt_language") or "繁體中文"))
+    target_role = _humanize_text(str(summary.get("role") or "")).strip()
+    mode_rule = (
+        "輸出必須是可直接交給程式生成 AI 的完整任務說明，用自然段敘事，不可使用欄位標題或條列模板。"
+        if mode == "coding"
+        else "輸出必須是可直接投餵對話模型的工作說明書，用自然段敘事，不可出現機械欄位名。"
+    )
+    instruction = f"""
+你是最終提示詞生成 AI。請根據需求摘要，輸出一份高品質、自然語言、可直接投餵下游模型的最終提示詞。
+
+硬性規則：
+1. 只輸出最終提示詞，不要解釋。
+2. 不可使用欄位標題、清單模板、問卷語氣。
+3. 必須像資深工程師或顧問寫給下游 AI 的工作說明書。
+4. 必須明確吸收需求摘要中的角色、任務、上下文、限制、輸出要求與成功標準。
+4.1 第一個句子必須明確以「你是{target_role}」為開頭，不可改成其他泛用角色。
+5. 禁止出現「未提供、待確認、TBD、N/A」。
+6. 若資訊不足，請用保守、可執行的預設自然補齊。
+7. 最終語言使用：{prompt_language}。
+8. 模式：{mode}。{mode_rule}
+
+[需求摘要 JSON]
+{json.dumps(summary, ensure_ascii=False)}
+"""
+    for api_key, base_url, model in attempts:
+        try:
+            client = _client(api_key, base_url)
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "你是高品質最終提示詞生成器，只輸出最終提示詞。"},
+                    {"role": "user", "content": instruction},
+                ],
+                temperature=0.2,
+                timeout=25,
+            )
+            content = _strip_code_fence(str(completion.choices[0].message.content or "").strip())
+            if content and not _looks_like_refusal_text(content):
+                return _force_prompt_role_intro(content, target_role, prompt_language)
+        except Exception:
+            logger.exception("prompt generation from summary attempt failed")
+            continue
+    return ""
+
+
+def generate_final_prompt_from_summary(
+    summary: Dict[str, object],
+    *,
+    idea: str,
+    questions: List[dict],
+    answers: List[dict],
+    custom_api_key: Optional[str] = None,
+    custom_base_url: Optional[str] = None,
+    custom_model: Optional[str] = None,
+) -> str:
+    mode = str(summary.get("mode") or "general")
+    primary_code = str(summary.get("primary_code") or "")
+    key_sub = str(summary.get("sub_code") or "")
+    prompt_language = str(summary.get("prompt_language") or "繁體中文")
+    fields = summary.get("fields") if isinstance(summary.get("fields"), dict) else {}
+    mode_solution = summary.get("mode_solution") if isinstance(summary.get("mode_solution"), dict) else {}
+    execution_focus = _humanize_text(str(summary.get("execution_focus") or _classification_execution_focus(primary_code)))
+    method_rule = _humanize_text(str(summary.get("method_rule") or _subcategory_method_text(key_sub)))
+
+    llm_prompt = ""
+    if mode in {"coding", "dialogue"}:
+        llm_prompt = _generate_coding_or_dialogue_prompt_from_summary_with_llm(
+            summary=summary,
+            custom_api_key=custom_api_key,
+            custom_base_url=custom_base_url,
+            custom_model=custom_model,
+        )
+        if llm_prompt:
+            stabilized = _stabilize_final_prompt_text(
+                prompt_text=llm_prompt,
+                primary_code=primary_code,
+                sub_code=key_sub,
+                prompt_language=prompt_language,
+                custom_api_key=custom_api_key,
+                custom_base_url=custom_base_url,
+                custom_model=custom_model,
+            )
+            if stabilized and not _is_low_quality_final_prompt(stabilized):
+                return _strip_code_fence(stabilized)
+
+    if mode == "coding":
+        return _force_prompt_role_intro(_strip_code_fence(
+            _build_coding_solution_prompt(
+                fields=fields,
+                coding_solution=mode_solution,
+                prompt_language=prompt_language,
+                execution_focus=execution_focus,
+                method_rule=method_rule,
+            )
+        ), summary.get("role", "資深軟體工程師"), prompt_language)
+    if mode == "dialogue":
+        return _force_prompt_role_intro(_strip_code_fence(
+            _build_dialogue_solution_prompt(
+                idea=idea,
+                fields=fields,
+                dialogue_solution=mode_solution,
+                questions=questions,
+                answers=answers,
+                prompt_language=prompt_language,
+                primary_code=primary_code,
+                key_sub=key_sub,
+                execution_focus=execution_focus,
+                method_rule=method_rule,
+            )
+        ), summary.get("role", fields.get("role", "")), prompt_language)
+    if mode == "image":
+        return _build_image_generation_prompt(
+            fields=fields,
+            questions=questions,
+            answers=answers,
+            prompt_language=prompt_language,
+            custom_api_key=custom_api_key,
+            custom_base_url=custom_base_url,
+            custom_model=custom_model,
+        )
+    if mode == "music":
+        return _build_music_generation_prompt(
+            fields=fields,
+            music_solution=mode_solution,
+            questions=questions,
+            answers=answers,
+            prompt_language=prompt_language,
+            custom_api_key=custom_api_key,
+            custom_base_url=custom_base_url,
+            custom_model=custom_model,
+        )
+
+    return _strip_code_fence(
+        _build_final_prompt_by_classification(
+            idea=idea,
+            questions=questions,
+            answers=answers,
+            demand_classification=_extract_profile_from_idea(idea).get("demand_classification") or {},
+            custom_api_key=custom_api_key,
+            custom_base_url=custom_base_url,
+            custom_model=custom_model,
+        )
+    )
+
+
+def generate_final_prompt_strict(
+    idea: str,
+    questions: List[dict],
+    answers: List[dict],
+    custom_api_key: Optional[str] = None,
+    custom_base_url: Optional[str] = None,
+    custom_model: Optional[str] = None,
+) -> str:
+    summary = analyze_requirements_strict(
+        idea=idea,
+        questions=questions,
+        answers=answers,
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+    )
+    base_prompt = generate_final_prompt_from_summary(
+        summary,
+        idea=idea,
+        questions=questions,
+        answers=answers,
+        custom_api_key=custom_api_key,
+        custom_base_url=custom_base_url,
+        custom_model=custom_model,
+    )
+    profile = _extract_profile_from_idea(idea)
+    primary_code = str(summary.get("primary_code") or "")
+    key_sub = str(summary.get("sub_code") or "")
+    mode_hint = str(summary.get("mode") or "general")
+    prompt_language = str(summary.get("prompt_language") or _extract_prompt_language_preference(questions, answers, profile))
+    if mode_hint in {"image", "music", "video"}:
+        return _strip_code_fence(base_prompt)
     rewritten = _rewrite_prompt_by_user_method(
         prompt_text=base_prompt,
         prompt_language=prompt_language,
@@ -5944,12 +6436,11 @@ def generate_final_prompt_strict(
         custom_model=custom_model,
     )
     if _is_low_quality_final_prompt(rewritten):
-        # 使用原始高語義草稿重試，避免重寫器把內容壓成模板句。
         rewritten = base_prompt
     stabilized = _stabilize_final_prompt_text(
         prompt_text=rewritten,
         primary_code=primary_code,
-        sub_code=(sub_codes[0] if sub_codes else ""),
+        sub_code=key_sub,
         prompt_language=prompt_language,
         is_video_mode=(mode_hint == "video"),
         is_music_mode=(mode_hint == "music"),
@@ -5961,7 +6452,7 @@ def generate_final_prompt_strict(
         stabilized = _stabilize_final_prompt_text(
             prompt_text=base_prompt,
             primary_code=primary_code,
-            sub_code=(sub_codes[0] if sub_codes else ""),
+            sub_code=key_sub,
             prompt_language=prompt_language,
             is_video_mode=(mode_hint == "video"),
             is_music_mode=(mode_hint == "music"),
