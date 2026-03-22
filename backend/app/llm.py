@@ -2062,6 +2062,10 @@ DIALOGUE_TARGET_FOLLOWUP = _question_count_from_env("DIALOGUE_QUESTIONS_FOLLOWUP
 QUESTION_DYNAMIC_USE_LLM = _bool_from_env("QUESTION_DYNAMIC_USE_LLM", False)
 QUESTION_DYNAMIC_TEMPERATURE = _float_from_env("QUESTION_DYNAMIC_TEMPERATURE", 0.0, minimum=0.0, maximum=1.0)
 
+# 最終提示詞若依賴 LLM 二次改寫，本地與線上可能因模型輸出差異而不一致。
+# 預設關閉這層隨機性，改用程式內的確定性生成與清理流程，確保同樣輸入得到同樣輸出。
+FINAL_PROMPT_USE_LLM = _bool_from_env("FINAL_PROMPT_USE_LLM", False)
+
 
 IMAGE_SLOT_QUESTION_CONFIG: Dict[str, dict] = {
     "image_model": {
@@ -5817,6 +5821,8 @@ def _rewrite_prompt_by_user_method(
     source = _strip_code_fence(prompt_text)
     if not source:
         return _natural_prompt_fallback("", prompt_language)
+    if not FINAL_PROMPT_USE_LLM:
+        return source
 
     # 已是多媒體分段提示詞時，保留原格式，不做自然段改寫。
     if "[Model Target]" in source and "[Core Prompt]" in source:
@@ -7810,6 +7816,8 @@ def _synthesize_dialogue_solution_brief(
     custom_model: Optional[str] = None,
 ) -> Dict[str, object]:
     fallback = _fallback_dialogue_solution_brief(idea, fields, questions, answers)
+    if not FINAL_PROMPT_USE_LLM:
+        return fallback
     attempts = _build_llm_attempts(
         custom_api_key=custom_api_key,
         custom_base_url=custom_base_url,
@@ -11208,6 +11216,8 @@ def naturalize_prompt_to_paragraphs(
 ) -> str:
     source = _strip_code_fence(prompt_text)
     if not source:
+        return _natural_prompt_fallback(source, prompt_language)
+    if not FINAL_PROMPT_USE_LLM:
         return _natural_prompt_fallback(source, prompt_language)
 
     attempts = _build_llm_attempts(
