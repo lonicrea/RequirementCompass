@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { App, Button, Card, Input, Radio, Select, Space, Typography } from 'antd'
 import { api } from '../../lib/api'
+import { upsertProject } from '../../lib/storage'
 
 const { Title, Paragraph } = Typography
 
@@ -51,13 +52,7 @@ export default function StartPage() {
         message.error('生成的問題為空，請重試')
         return
       }
-      const projects = JSON.parse(
-        localStorage.getItem('requirement_compass_projects')
-        || localStorage.getItem('clarityai_alt_projects')
-        || '[]'
-      )
-      projects.push({ id: session_id, idea: normalizedIdea, lastVisited: new Date().toISOString() })
-      localStorage.setItem('requirement_compass_projects', JSON.stringify(projects))
+      upsertProject({ id: session_id, idea: normalizedIdea, lastVisited: new Date().toISOString() })
       router.push(`/questions/${session_id}`)
     } catch (err) {
       console.error('generateQuestions error', err?.response?.data || err)

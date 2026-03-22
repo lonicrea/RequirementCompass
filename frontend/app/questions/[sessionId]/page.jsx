@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { App, Card, Checkbox, Input, Button, Space, Typography, Modal, Radio } from 'antd'
 import { api, decodeApiBaseFromQuery, saveApiBase } from '../../../lib/api'
+import { removeProject } from '../../../lib/storage'
 
 const { Title, Paragraph } = Typography
 
@@ -171,17 +172,7 @@ export default function QuestionsPage() {
         setOtherAnswers({})
       } catch (err) {
         console.error(err)
-        // 移除目前 session 的本地記錄，避免重複跳轉再報錯
-        const saved = localStorage.getItem('requirement_compass_projects')
-          || localStorage.getItem('clarityai_alt_projects')
-        if (saved) {
-          try {
-            const arr = JSON.parse(saved).filter((p) => p.id !== sessionIdText)
-            localStorage.setItem('requirement_compass_projects', JSON.stringify(arr))
-          } catch (e) {
-            // 忽略本地資料解析錯誤
-          }
-        }
+        removeProject(sessionIdText)
         const backendError = err?.response?.data?.error
         if (backendError) {
           message.error(`載入問題失敗：${backendError}`)
@@ -299,6 +290,98 @@ export default function QuestionsPage() {
     }
   }
 
+  const renderQuestionInput = (q, index) => {
+    if (isAssessmentQuestion(q)) {
+      const assessment = parseAssessmentQuestion(q.text)
+      return (
+        <>
+          <Title level={5}>{index + 1}. {assessment.title}</Title>
+          <div className="assessment-box">
+            {assessment.items.map((item, itemIdx) => (
+              <div className="assessment-row" key={`${q.id}-assessment-${itemIdx}`}>
+                <span className="assessment-label">{item.label}</span>
+                <span className="assessment-value">{item.value}</span>
+              </div>
+            ))}
+            <div className="assessment-tip">{assessment.confirmText}</div>
+          </div>
+          <Input.TextArea
+            rows={3}
+            value={answers[q.id]}
+            placeholder="若上面判斷不正確，請直接修正。若正確可留空。"
+            onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
+          />
+        </>
+      )
+    }
+
+    const title = <Title level={5}>{index + 1}. {q.text}</Title>
+
+    if (q.type === 'choice') {
+      return (
+        <>
+          {title}
+          {isSingleChoiceQuestion(q) ? (
+            <Radio.Group
+              options={normalizeChoiceOptions(q.options).map((o) => ({ label: o, value: o }))}
+              value={Array.isArray(answers[q.id]) ? answers[q.id][0] : ''}
+              onChange={(e) => {
+                const picked = [e.target.value]
+                setAnswers({ ...answers, [q.id]: picked })
+                if (!hasSelectedOther(picked)) {
+                  setOtherAnswers({ ...otherAnswers, [q.id]: '' })
+                }
+              }}
+            />
+          ) : (
+            <Checkbox.Group
+              options={normalizeChoiceOptions(q.options).map((o) => ({ label: o, value: o }))}
+              value={answers[q.id]}
+              onChange={(vals) => {
+                const picked = Array.isArray(vals) ? vals : []
+                setAnswers({ ...answers, [q.id]: picked })
+                if (!hasSelectedOther(picked)) {
+                  setOtherAnswers({ ...otherAnswers, [q.id]: '' })
+                }
+              }}
+            />
+          )}
+          {hasSelectedOther(answers[q.id]) ? (
+            <Input
+              style={{ marginTop: 12, maxWidth: 420 }}
+              placeholder="請填寫「其他」內容"
+              value={otherAnswers[q.id] || ''}
+              onChange={(e) => setOtherAnswers({ ...otherAnswers, [q.id]: e.target.value })}
+            />
+          ) : null}
+        </>
+      )
+    }
+
+    if (q.type === 'narrative') {
+      return (
+        <>
+          {title}
+          <Input.TextArea
+            rows={4}
+            value={answers[q.id]}
+            onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
+          />
+        </>
+      )
+    }
+
+    return (
+      <>
+        {title}
+        <Input
+          value={answers[q.id]}
+          onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
+        />
+      </>
+    )
+  }
+
   if (loading) return <div className="container">載入中...</div>
 
   return (
@@ -309,87 +392,7 @@ export default function QuestionsPage() {
         <Space direction="vertical" style={{ width: '100%' }} size="large">
           {questions.map((q, idx) => (
             <div key={q.id}>
-              {isAssessmentQuestion(q) ? (
-                (() => {
-                  const assessment = parseAssessmentQuestion(q.text)
-                  return (
-                    <>
-                      <Title level={5}>{idx + 1}. {assessment.title}</Title>
-                      <div className="assessment-box">
-                        {assessment.items.map((item, itemIdx) => (
-                          <div className="assessment-row" key={`${q.id}-assessment-${itemIdx}`}>
-                            <span className="assessment-label">{item.label}</span>
-                            <span className="assessment-value">{item.value}</span>
-                          </div>
-                        ))}
-                        <div className="assessment-tip">{assessment.confirmText}</div>
-                      </div>
-                      <Input.TextArea
-                        rows={3}
-                        value={answers[q.id]}
-                        placeholder="若上面判斷不正確，請直接修正。若正確可留空。"
-                        onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
-                      />
-                    </>
-                  )
-                })()
-              ) : q.type === 'choice' ? (
-                <>
-                  <Title level={5}>{idx + 1}. {q.text}</Title>
-                <>
-                  {isSingleChoiceQuestion(q) ? (
-                    <Radio.Group
-                      options={normalizeChoiceOptions(q.options).map((o) => ({ label: o, value: o }))}
-                      value={Array.isArray(answers[q.id]) ? answers[q.id][0] : ''}
-                      onChange={(e) => {
-                        const picked = [e.target.value]
-                        setAnswers({ ...answers, [q.id]: picked })
-                        if (!hasSelectedOther(picked)) {
-                          setOtherAnswers({ ...otherAnswers, [q.id]: '' })
-                        }
-                      }}
-                    />
-                  ) : (
-                    <Checkbox.Group
-                      options={normalizeChoiceOptions(q.options).map((o) => ({ label: o, value: o }))}
-                      value={answers[q.id]}
-                      onChange={(vals) => {
-                        const picked = Array.isArray(vals) ? vals : []
-                        setAnswers({ ...answers, [q.id]: picked })
-                        if (!hasSelectedOther(picked)) {
-                          setOtherAnswers({ ...otherAnswers, [q.id]: '' })
-                        }
-                      }}
-                    />
-                  )}
-                  {hasSelectedOther(answers[q.id]) ? (
-                    <Input
-                      style={{ marginTop: 12, maxWidth: 420 }}
-                      placeholder="請填寫「其他」內容"
-                      value={otherAnswers[q.id] || ''}
-                      onChange={(e) => setOtherAnswers({ ...otherAnswers, [q.id]: e.target.value })}
-                    />
-                  ) : null}
-                </>
-                </>
-              ) : q.type === 'narrative' ? (
-                <>
-                <Title level={5}>{idx + 1}. {q.text}</Title>
-                <Input.TextArea
-                  rows={4}
-                  value={answers[q.id]}
-                  onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
-                />
-                </>
-              ) : (
-                <>
-                <Title level={5}>{idx + 1}. {q.text}</Title>
-                <Input
-                  value={answers[q.id]}
-                  onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
-                />
-                </>
-              )}
+              {renderQuestionInput(q, idx)}
             </div>
           ))}
           <div className="actions">

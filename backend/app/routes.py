@@ -66,6 +66,55 @@ def get_db():
         db.close()
 
 
+def _custom_api_kwargs(custom_api) -> dict:
+    if not custom_api:
+        return {}
+    return {
+        "custom_api_key": custom_api.api_key,
+        "custom_base_url": custom_api.base_url,
+        "custom_model": custom_api.model,
+    }
+
+
+def _load_session_or_error(db: Session, session_id: str):
+    sm = db.get(SessionModel, session_id)
+    if not sm:
+        return None, JSONResponse({"error": "無效的會話 ID"}, status_code=400)
+    return sm, None
+
+
+def _load_round_history(db: Session, session_id: str) -> List[dict]:
+    historical_questions: List[dict] = []
+    previous_rounds = (
+        db.query(Round)
+        .filter(Round.session_id == session_id)
+        .order_by(Round.round_number.asc())
+        .all()
+    )
+    for record in previous_rounds:
+        try:
+            round_questions = json.loads(record.questions)
+            round_answers = json.loads(record.answers)
+        except Exception:
+            continue
+        aligned_count = min(len(round_questions or []), len(round_answers or []))
+        if aligned_count > 0:
+            historical_questions.extend((round_questions or [])[:aligned_count])
+    return historical_questions
+
+
+def _dump_answers(answers: list) -> List[dict]:
+    dumped: List[dict] = []
+    for answer in answers or []:
+        if hasattr(answer, "model_dump"):
+            dumped.append(answer.model_dump())
+        elif hasattr(answer, "dict"):
+            dumped.append(answer.dict())
+        elif isinstance(answer, dict):
+            dumped.append(answer)
+    return dumped
+
+
 @router.get("/health", response_model=HealthResponse)
 def health():
     return {"status": "healthy"}
@@ -106,9 +155,7 @@ def api_generate_questions(payload: GenerateQuestionsRequest, db: Session = Depe
             user_identity=user_identity,
             language_region=language_region,
             existing_resources=existing_resources,
-            custom_api_key=payload.custom_api.api_key if payload.custom_api else None,
-            custom_base_url=payload.custom_api.base_url if payload.custom_api else None,
-            custom_model=payload.custom_api.model if payload.custom_api else None,
+            **_custom_api_kwargs(payload.custom_api),
         )
 
         enriched_idea = _build_enriched_idea(
@@ -125,9 +172,7 @@ def api_generate_questions(payload: GenerateQuestionsRequest, db: Session = Depe
             user_identity=user_identity,
             language_region=language_region,
             existing_resources=existing_resources,
-            custom_api_key=payload.custom_api.api_key if payload.custom_api else None,
-            custom_base_url=payload.custom_api.base_url if payload.custom_api else None,
-            custom_model=payload.custom_api.model if payload.custom_api else None,
+            **_custom_api_kwargs(payload.custom_api),
         )
 
         sm = SessionModel(
@@ -161,29 +206,15 @@ def api_submit_answers(payload: SubmitAnswersRequest, db: Session = Depends(get_
         if not payload.session_id or not payload.answers:
             return JSONResponse({"error": "會話 ID 和答案不能為空"}, status_code=400)
 
-        sm = db.get(SessionModel, payload.session_id)
-        if not sm:
-            return JSONResponse({"error": "無效的會話 ID"}, status_code=400)
+        sm, error_resp = _load_session_or_error(db, payload.session_id)
+        if error_resp:
+            return error_resp
 
         questions = json.loads(sm.questions)
         existing_answers: List[dict] = json.loads(sm.answers)
-        all_answers = existing_answers + [a.dict() for a in payload.answers]
-        historical_questions: List[dict] = []
-        previous_rounds = (
-            db.query(Round)
-            .filter(Round.session_id == sm.id)
-            .order_by(Round.round_number.asc())
-            .all()
-        )
-        for record in previous_rounds:
-            try:
-                round_questions = json.loads(record.questions)
-                round_answers = json.loads(record.answers)
-            except Exception:
-                continue
-            aligned_count = min(len(round_questions or []), len(round_answers or []))
-            if aligned_count > 0:
-                historical_questions.extend((round_questions or [])[:aligned_count])
+        current_answers = _dump_answers(payload.answers)
+        all_answers = existing_answers + current_answers
+        historical_questions = _load_round_history(db, sm.id)
 
         # 報告生成時使用「資料庫歷史問答 + 本輪問答」完整上下文補欄位，避免輸出空白。
         doc_questions = historical_questions + questions
@@ -192,9 +223,7 @@ def api_submit_answers(payload: SubmitAnswersRequest, db: Session = Depends(get_
             idea=sm.idea,
             questions=doc_questions,
             answers=all_answers,
-            custom_api_key=payload.custom_api.api_key if payload.custom_api else None,
-            custom_base_url=payload.custom_api.base_url if payload.custom_api else None,
-            custom_model=payload.custom_api.model if payload.custom_api else None,
+            **_custom_api_kwargs(payload.custom_api),
         )
         report = _strip_text_code_fence(report)
 
@@ -212,7 +241,7 @@ def api_submit_answers(payload: SubmitAnswersRequest, db: Session = Depends(get_
             session_id=sm.id,
             round_number=round_number,
             questions=json.dumps(questions, ensure_ascii=False),
-            answers=json.dumps([a.dict() for a in payload.answers], ensure_ascii=False),
+            answers=json.dumps(current_answers, ensure_ascii=False),
             report=report,
         )
         db.add(round_entry)
@@ -235,9 +264,9 @@ def api_continue_with_feedback(payload: ContinueFeedbackRequest, db: Session = D
         if not payload.session_id or not payload.feedback:
             return JSONResponse({"error": "會話 ID 和反饋不能為空"}, status_code=400)
 
-        sm = db.get(SessionModel, payload.session_id)
-        if not sm:
-            return JSONResponse({"error": "無效的會話 ID"}, status_code=400)
+        sm, error_resp = _load_session_or_error(db, payload.session_id)
+        if error_resp:
+            return error_resp
         questions = json.loads(sm.questions)
         answers = json.loads(sm.answers)
         profile = _extract_profile_from_idea(sm.idea)
@@ -250,9 +279,7 @@ def api_continue_with_feedback(payload: ContinueFeedbackRequest, db: Session = D
             user_identity=profile["user_identity"],
             language_region=profile["language_region"],
             existing_resources=profile["existing_resources"],
-            custom_api_key=payload.custom_api.api_key if payload.custom_api else None,
-            custom_base_url=payload.custom_api.base_url if payload.custom_api else None,
-            custom_model=payload.custom_api.model if payload.custom_api else None,
+            **_custom_api_kwargs(payload.custom_api),
         )
 
         sm.questions = json.dumps(new_questions, ensure_ascii=False)
@@ -276,9 +303,9 @@ def api_append_questions(payload: AppendQuestionsRequest, db: Session = Depends(
         if not payload.session_id:
             return JSONResponse({"error": "會話 ID 不能為空"}, status_code=400)
 
-        sm = db.get(SessionModel, payload.session_id)
-        if not sm:
-            return JSONResponse({"error": "無效的會話 ID"}, status_code=400)
+        sm, error_resp = _load_session_or_error(db, payload.session_id)
+        if error_resp:
+            return error_resp
 
         existing_questions: List[dict] = json.loads(sm.questions)
         existing_answers: List[dict] = json.loads(sm.answers)
@@ -293,9 +320,7 @@ def api_append_questions(payload: AppendQuestionsRequest, db: Session = Depends(
             user_identity=profile["user_identity"],
             language_region=profile["language_region"],
             existing_resources=profile["existing_resources"],
-            custom_api_key=payload.custom_api.api_key if payload.custom_api else None,
-            custom_base_url=payload.custom_api.base_url if payload.custom_api else None,
-            custom_model=payload.custom_api.model if payload.custom_api else None,
+            **_custom_api_kwargs(payload.custom_api),
         )
 
         merged_questions = _merge_questions_with_unique_ids(existing_questions, newly_generated)
@@ -319,39 +344,22 @@ def api_analyze_requirements(payload: AnalyzeRequirementsRequest, db: Session = 
         if not payload.session_id:
             return JSONResponse({"error": "會話 ID 不能為空"}, status_code=400)
 
-        sm = db.get(SessionModel, payload.session_id)
-        if not sm:
-            return JSONResponse({"error": "無效的會話 ID"}, status_code=400)
+        sm, error_resp = _load_session_or_error(db, payload.session_id)
+        if error_resp:
+            return error_resp
 
         questions = json.loads(sm.questions or "[]")
         answers = json.loads(sm.answers or "[]")
         if not answers:
             return JSONResponse({"error": "尚未有可用回答，請先提交答案"}, status_code=400)
 
-        historical_questions: List[dict] = []
-        previous_rounds = (
-            db.query(Round)
-            .filter(Round.session_id == sm.id)
-            .order_by(Round.round_number.asc())
-            .all()
-        )
-        for record in previous_rounds:
-            try:
-                round_questions = json.loads(record.questions)
-                round_answers = json.loads(record.answers)
-            except Exception:
-                continue
-            aligned_count = min(len(round_questions or []), len(round_answers or []))
-            if aligned_count > 0:
-                historical_questions.extend((round_questions or [])[:aligned_count])
+        historical_questions = _load_round_history(db, sm.id)
 
         summary = analyze_requirements_strict(
             idea=sm.idea,
             questions=historical_questions + questions,
             answers=answers,
-            custom_api_key=payload.custom_api.api_key if payload.custom_api else None,
-            custom_base_url=payload.custom_api.base_url if payload.custom_api else None,
-            custom_model=payload.custom_api.model if payload.custom_api else None,
+            **_custom_api_kwargs(payload.custom_api),
         )
         add_token_usage(db, tokens=_estimate_tokens(sm.idea, questions, answers))
         return {"session_id": sm.id, "requirement_summary": summary}
@@ -370,9 +378,7 @@ def api_naturalize_prompt(payload: NaturalizePromptRequest):
             prompt_text=raw,
             prompt_language=payload.prompt_language or "繁體中文",
             mode_hint=payload.mode_hint,
-            custom_api_key=payload.custom_api.api_key if payload.custom_api else None,
-            custom_base_url=payload.custom_api.base_url if payload.custom_api else None,
-            custom_model=payload.custom_api.model if payload.custom_api else None,
+            **_custom_api_kwargs(payload.custom_api),
         )
         return {"prompt": natural}
     except Exception as e:
@@ -389,40 +395,23 @@ def api_generate_final_prompt(payload: GenerateFinalPromptRequest, db: Session =
         if not payload.session_id:
             return JSONResponse({"error": "會話 ID 不能為空"}, status_code=400)
 
-        sm = db.get(SessionModel, payload.session_id)
-        if not sm:
-            return JSONResponse({"error": "無效的會話 ID"}, status_code=400)
+        sm, error_resp = _load_session_or_error(db, payload.session_id)
+        if error_resp:
+            return error_resp
 
         questions = json.loads(sm.questions or "[]")
         answers = json.loads(sm.answers or "[]")
         if not answers:
             return JSONResponse({"error": "尚未有可用回答，請先提交答案"}, status_code=400)
 
-        historical_questions: List[dict] = []
-        previous_rounds = (
-            db.query(Round)
-            .filter(Round.session_id == sm.id)
-            .order_by(Round.round_number.asc())
-            .all()
-        )
-        for record in previous_rounds:
-            try:
-                round_questions = json.loads(record.questions)
-                round_answers = json.loads(record.answers)
-            except Exception:
-                continue
-            aligned_count = min(len(round_questions or []), len(round_answers or []))
-            if aligned_count > 0:
-                historical_questions.extend((round_questions or [])[:aligned_count])
+        historical_questions = _load_round_history(db, sm.id)
 
         doc_questions = historical_questions + questions
         prompt_text = generate_final_prompt_strict(
             idea=sm.idea,
             questions=doc_questions,
             answers=answers,
-            custom_api_key=payload.custom_api.api_key if payload.custom_api else None,
-            custom_base_url=payload.custom_api.base_url if payload.custom_api else None,
-            custom_model=payload.custom_api.model if payload.custom_api else None,
+            **_custom_api_kwargs(payload.custom_api),
         )
         clean_prompt = _strip_text_code_fence(prompt_text)
 
@@ -441,9 +430,9 @@ def api_generate_final_prompt(payload: GenerateFinalPromptRequest, db: Session =
 @router.get("/session/{session_id}", response_model=SessionDataResponse)
 def api_get_session(session_id: str, db: Session = Depends(get_db)):
     try:
-        sm = db.get(SessionModel, session_id)
-        if not sm:
-            return JSONResponse({"error": "無效的會話 ID"}, status_code=400)
+        sm, error_resp = _load_session_or_error(db, session_id)
+        if error_resp:
+            return error_resp
         questions = json.loads(sm.questions)
         if not questions:
             profile = _extract_profile_from_idea(sm.idea)
@@ -504,9 +493,9 @@ def api_get_rounds(session_id: str, db: Session = Depends(get_db)):
 @router.post("/generate-pdf")
 def api_generate_pdf(payload: GeneratePdfRequest, db: Session = Depends(get_db)):
     try:
-        sm = db.get(SessionModel, payload.session_id)
-        if not sm:
-            return JSONResponse({"error": "無效的會話 ID"}, status_code=400)
+        sm, error_resp = _load_session_or_error(db, payload.session_id)
+        if error_resp:
+            return error_resp
 
         output_dir = Path("output")
         output_dir.mkdir(exist_ok=True)
@@ -558,7 +547,7 @@ def api_delete_session(session_id: str, db: Session = Depends(get_db)):
 def _estimate_tokens(idea: str, questions: list, answers: list | None = None) -> int:
     text = idea + json.dumps(questions, ensure_ascii=False)
     if answers:
-        text += json.dumps([a.dict() if hasattr(a, "dict") else a for a in answers], ensure_ascii=False)
+        text += json.dumps(_dump_answers(answers), ensure_ascii=False)
     return max(100, len(text) // 2)
 
 

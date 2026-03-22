@@ -66,17 +66,6 @@ export const getApiBase = () => {
         return fromStorage
       }
     }
-
-    const legacy = localStorage.getItem('clarityai_alt_api')
-    const fromLegacy = migrateLocalBase(decodeMaybeUri(legacy))
-    if (fromLegacy) {
-      if (isLocalPage() && !isLocalBackend(fromLegacy)) {
-        localStorage.removeItem('clarityai_alt_api')
-      } else if (!(isLocalBackend(fromLegacy) && !isLocalPage())) {
-        localStorage.setItem('requirement_compass_api', fromLegacy)
-        return fromLegacy
-      }
-    }
   }
 
   if (isLocalPage()) {
@@ -211,6 +200,20 @@ const requestBlob = async (path, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) =
 
 export const api = {
   health: () => request('/health'),
+  analyzeRequirements: (id, customApi) => {
+    if (!id || typeof id !== 'string') return Promise.reject(new Error('sessionId 缺失'))
+    return request(
+      '/analyze-requirements',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          session_id: id,
+          custom_api: customApi
+        })
+      },
+      LLM_TIMEOUT_MS
+    )
+  },
   generateQuestions: (idea, profile = {}, customApi) => request(
     '/generate-questions',
     {
