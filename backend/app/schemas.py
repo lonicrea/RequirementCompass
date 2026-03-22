@@ -99,6 +99,17 @@ class HealthResponse(BaseModel):
     status: str
 
 
+class VersionResponse(BaseModel):
+    app_version: str
+    git_commit: str
+    question_dynamic_use_llm: bool
+    final_prompt_use_llm: bool
+    coding_questions_first_round: int
+    coding_questions_followup: int
+    dialogue_questions_first_round: int
+    dialogue_questions_followup: int
+
+
 class SessionDataResponse(BaseModel):
     session_id: str
     idea: str

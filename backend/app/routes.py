@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from pathlib import Path
@@ -16,6 +17,12 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import SessionLocal
 from app.llm import (
+    CODING_TARGET_FIRST_ROUND,
+    CODING_TARGET_FOLLOWUP,
+    DIALOGUE_TARGET_FIRST_ROUND,
+    DIALOGUE_TARGET_FOLLOWUP,
+    FINAL_PROMPT_USE_LLM,
+    QUESTION_DYNAMIC_USE_LLM,
     _qa_topic_key,
     classify_demand,
     generate_final_prompt_strict,
@@ -40,6 +47,7 @@ from app.schemas import (
     SubmitAnswersRequest,
     SubmitAnswersResponse,
     RoundsResponse,
+    VersionResponse,
 )
 from app.token_limit import add_token_usage, get_today_usage
 
@@ -58,6 +66,20 @@ def get_db():
 @router.get("/health", response_model=HealthResponse)
 def health():
     return {"status": "healthy"}
+
+
+@router.get("/version", response_model=VersionResponse)
+def version():
+    return {
+        "app_version": "0.1.0",
+        "git_commit": os.getenv("GIT_COMMIT", "unknown"),
+        "question_dynamic_use_llm": QUESTION_DYNAMIC_USE_LLM,
+        "final_prompt_use_llm": FINAL_PROMPT_USE_LLM,
+        "coding_questions_first_round": CODING_TARGET_FIRST_ROUND,
+        "coding_questions_followup": CODING_TARGET_FOLLOWUP,
+        "dialogue_questions_first_round": DIALOGUE_TARGET_FIRST_ROUND,
+        "dialogue_questions_followup": DIALOGUE_TARGET_FOLLOWUP,
+    }
 
 
 @router.post("/generate-questions", response_model=GenerateQuestionsResponse)
