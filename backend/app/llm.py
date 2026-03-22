@@ -3207,8 +3207,8 @@ def _dialogue_dynamic_followup_candidates(
         bucket.append({"facet": facet, "text": text, "type": q_type, "options": options})
 
     candidates: List[dict] = []
-    add(candidates, "goal", f"你想透過「{subject}」最後拿到的結果是什麼？")
-    add(candidates, "context", f"你現在最卡的點是在「{subject}」的哪一步？")
+    add(candidates, "goal", f"圍繞「{subject}」，你這次最希望最後拿到什麼結果？")
+    add(candidates, "context", f"你現在卡在「{subject}」的哪一段？是方向不清、資料不夠，還是不知道怎麼開始？")
     add(
         candidates,
         "depth",
@@ -3223,11 +3223,11 @@ def _dialogue_dynamic_followup_candidates(
         "choice",
         ["可直接複製的完整內容", "條列重點", "段落版說明", "表格/對照表", "其他"],
     )
-    add(candidates, "success", "怎樣才算這輪對話真的有幫到你？給我 1 到 2 個判準就好。")
+    add(candidates, "success", "怎樣才算這輪對話真的有幫到你？給我 1 到 2 個你會拿來判斷的標準就好。")
 
     # 進一步補齊常見決策變數。
-    add(candidates, "audience", "這份內容主要給誰看？他看完後要做什麼決定或行動？")
-    add(candidates, "constraints", "你有沒有不能踩的邊界？像語氣、資料來源、敏感話題或長度限制。")
+    add(candidates, "audience", "這份內容主要是你自己用，還是要交給別人看？對方看完後要做什麼決定或行動？")
+    add(candidates, "constraints", "有沒有明確不能踩的邊界？例如語氣、資料來源、敏感話題、篇幅或合規限制。")
 
     if any(token in lowered for token in ["論文", "研究", "學術", "文獻"]):
         add(candidates, "research_question", "如果先收斂成一句研究問題，你現在會怎麼寫？")
@@ -3278,22 +3278,22 @@ def _dialogue_dynamic_followup_candidates(
         )
 
     if any(token in lowered for token in ["股市", "股票", "投資", "台股", "美股", "etf", "k線", "財報"]):
-        add(candidates, "stock_scope", "你主要想分析哪個市場或標的？（例如台股、美股、ETF、特定股票）")
+        add(candidates, "stock_scope", "你這次想看的範圍先鎖在哪裡？例如台股、美股、ETF，或某一檔股票。")
         add(
             candidates,
             "stock_horizon",
-            "你這次分析偏短線操作還是中長線配置？",
+            "你這次分析比較偏短線進出，還是中長線配置？",
             "choice",
             ["當沖/短線", "波段", "中長線", "資產配置", "尚未決定"],
         )
         add(
             candidates,
             "stock_style",
-            "你更想看哪種分析角度？",
+            "你最想先看哪個角度？",
             "choice",
             ["技術面", "基本面", "消息面", "三者整合", "風險控管優先"],
         )
-        add(candidates, "stock_output", "你希望最後拿到的輸出是什麼？（例如觀察清單、進出場條件、風險提醒）")
+        add(candidates, "stock_output", "如果這輪分析做對了，你最希望最後拿到什麼？例如觀察清單、進出場條件、風險提醒，或標的比較表。")
 
     if has_history:
         add(candidates, "iteration", "看完上一輪，你現在最想先修哪一個地方？")
@@ -6736,14 +6736,14 @@ def _qa_topic_key(question_text: str) -> str:
         "reference_artist": ["參考歌手", "參考樂手", "參考樂團", "參考作品", "reference artist", "reference track", "inspired by", "風格像"],
         "must_avoid_music": ["避免元素", "侵權風格", "一定要避免", "不要出現", "要避免", "禁忌元素"],
         "interaction_role": ["ai 要扮演什麼角色", "扮演什麼角色", "assistant role", "對話角色"],
-        "interaction_goal": ["互動的主要目標", "對話目標", "互動目標", "interaction goal"],
-        "scope_depth": ["回答深度", "深度到哪裡", "快速重點", "中等解析", "深入分析", "依情境切換"],
-        "desired_output": ["最後產出什麼", "最終產出", "想得到什麼成果", "交付成果", "產出什麼", "最終輸出形式", "輸出形式是什麼"],
-        "target_audience_dialogue": ["主要對象是誰", "對話對象", "target audience"],
-        "tone_boundary": ["語氣與邊界", "語氣邊界", "tone", "boundary"],
+        "interaction_goal": ["互動的主要目標", "對話目標", "互動目標", "interaction goal", "最想先解決哪件事"],
+        "scope_depth": ["回答深度", "回答到哪個深度", "深度到哪裡", "快速重點", "中等解析", "深入分析", "依情境切換", "先簡後深"],
+        "desired_output": ["最後產出什麼", "最終產出", "想得到什麼成果", "交付成果", "產出什麼", "最終輸出形式", "輸出形式是什麼", "最後拿到什麼結果", "整理成哪種形式"],
+        "target_audience_dialogue": ["主要對象是誰", "對話對象", "target audience", "給誰看", "主要是你自己用，還是要交給別人看"],
+        "tone_boundary": ["語氣與邊界", "語氣邊界", "tone", "boundary", "不能踩", "敏感話題", "合規限制", "邊界"],
         "turn_rules": ["每回合輸出規則", "回合規則", "turn rules"],
-        "success_criteria_dialogue": ["判定對話成功", "對話成功", "success criteria"],
-        "context_anchor": ["固定背景事件", "關鍵資訊", "內容錨點", "context anchor"],
+        "success_criteria_dialogue": ["判定對話成功", "對話成功", "success criteria", "真的有幫到你", "判斷的標準"],
+        "context_anchor": ["固定背景事件", "關鍵資訊", "內容錨點", "context anchor", "範圍先鎖在哪裡", "看哪個市場", "哪個標的"],
         "correction_preference": ["糾錯", "修正方式", "correction"],
         "research_scope": ["研究範圍", "時間範圍", "地區範圍", "研究對象", "範圍界定"],
         "research_method": ["研究方法", "方法論", "研究設計", "methodology"],
@@ -7737,6 +7737,11 @@ def _derive_dialogue_content_focus(signal: Dict[str, str], idea: str, fields: Di
     if signal.get("sources_tools"):
         add_point(f"提供可查核的資料來源與工具建議：{signal.get('sources_tools')}")
 
+    if any(token in merged_text for token in ["股市", "股票", "投資", "etf", "台股", "美股", "財報", "技術面", "基本面"]):
+        add_point("先說清楚分析標的、市場範圍與時間視角，再展開判讀。")
+        add_point("分析時區分基本面、技術面、消息面與風險，不要混成一句空話。")
+        add_point("避免直接下買賣指令，改提供可查核的判讀框架與下一步。")
+
     if any(token in merged_text for token in ["論文", "題目", "研究", "學術"]):
         add_point("至少提出三個具體題目或研究方向，避免空泛陳述。")
         add_point("每個題目都要附研究範圍、方法與資料來源建議。")
@@ -7757,9 +7762,10 @@ def _fallback_dialogue_solution_brief(
     answers: List[dict],
 ) -> Dict[str, object]:
     signal = _collect_dialogue_signal(questions, answers)
-    role = signal.get("interaction_role") or fields.get("role") or "對話策略顧問"
+    default_role = _derive_dialogue_expert_role("10", "", idea, fields)
+    role = signal.get("interaction_role") or default_role
     if _contains_end_user_identity_role(role) or _is_generic_dialogue_persona(role):
-        role = "對話策略顧問"
+        role = default_role
     goal = (
         signal.get("interaction_goal")
         or signal.get("desired_output")
@@ -7767,8 +7773,9 @@ def _fallback_dialogue_solution_brief(
         or _core_idea_from_idea(idea)
         or "對話協作"
     )
-    audience = signal.get("target_audience") or "一般使用者"
-    tone = signal.get("tone_boundary") or "清晰、專業、友善，避免模糊與空泛回答"
+    stock_like = _is_stock_analysis_like_dialogue(" ".join([str(idea or ""), str(goal or "")]))
+    audience = signal.get("target_audience") or ("想理解市場與標的風險的一般投資者" if stock_like else "一般使用者")
+    tone = signal.get("tone_boundary") or ("清楚、審慎、可查核，避免武斷買賣指令" if stock_like else "清晰、專業、友善，避免模糊與空泛回答")
     turn_rules = signal.get("turn_rules") or "每回合先復述使用者目標，再提供一個可執行建議，最後補一個必要追問。"
     if signal.get("scope_depth"):
         turn_rules = f"{turn_rules.rstrip('。')}；深度偏好：{signal.get('scope_depth')}。"
@@ -7786,11 +7793,19 @@ def _fallback_dialogue_solution_brief(
         "turn_rules": turn_rules,
         "correction_policy": correction,
         "context_anchor": context_anchor,
-        "response_strategy": [
-            "先確認使用者目標與限制，再回答",
-            "輸出以步驟、清單、範例為主，避免空泛描述",
-            "資訊不足時先列待確認清單，不硬猜",
-        ],
+        "response_strategy": (
+            [
+                "先確認分析目標、標的範圍與時間視角，再開始判讀",
+                "區分基本面、技術面、消息面與風險，不把不同層次混成一句話",
+                "避免直接下買賣指令，改提供可查核的分析框架與下一步",
+            ]
+            if stock_like
+            else [
+                "先確認使用者目標與限制，再回答",
+                "輸出以步驟、清單、範例為主，避免空泛描述",
+                "資訊不足時先列待確認清單，不硬猜",
+            ]
+        ),
         "content_focus_points": content_focus_points,
         "success_checks": [
             "回覆內容與使用者需求主題一致",
@@ -7925,6 +7940,15 @@ def _is_research_like_dialogue(text: str) -> bool:
     return any(token in lowered for token in tokens)
 
 
+def _is_stock_analysis_like_dialogue(text: str) -> bool:
+    lowered = str(text or "").lower()
+    tokens = [
+        "股市", "股票", "投資", "etf", "台股", "美股", "財報",
+        "技術面", "基本面", "k 線", "籌碼", "殖利率", "大盤",
+    ]
+    return any(token in lowered for token in tokens)
+
+
 def _derive_dialogue_expert_role(
     primary_code: str,
     key_sub: str,
@@ -7945,6 +7969,9 @@ def _derive_dialogue_expert_role(
             return "學術研究導師（證據鏈與論文結構）"
         return "學術寫作導師（研究流程與引用審校）"
 
+    if _is_stock_analysis_like_dialogue(text):
+        return "資深股市研究與投資分析顧問"
+
     default_by_primary = {
         "1": "研究分析顧問",
         "2": "資源導航顧問",
@@ -7956,7 +7983,7 @@ def _derive_dialogue_expert_role(
         "8": "教學互動教練",
         "9": "工程協作教練",
         "10": "對話策略教練",
-        "11": "規劃管理顧問",
+        "11": "對話策略顧問",
         "12": "風險合規顧問",
     }
     return default_by_primary.get(str(primary_code), "對話策略顧問")
@@ -9547,6 +9574,9 @@ def _build_final_prompt_by_classification(
         fields["role"] = _default_role_for_classification(primary_code, key_sub)
     method_rule = _humanize_text(_subcategory_method_text(key_sub))
     execution_focus = _humanize_text(_classification_execution_focus(primary_code))
+    if dialogue_mode:
+        method_rule = "對話任務：先釐清目標、對象、輸出與邊界，再依回合規則提供可執行回答與必要追問。"
+        execution_focus = "先確認使用者真正要解決的問題，再把答案整理成可直接使用的內容，不要空泛繞圈。"
     if music_mode:
         method_rule = "音樂生成：先鎖定場景、曲風、情緒與時長，再設定節奏、配器、人聲與歌詞，最後輸出主提示詞、精簡版與避雷條件。"
         execution_focus = "先定音樂目標與使用場景，再把可控參數寫成可直接投餵模型的提示詞，並附驗收與迭代方式。"
@@ -11077,7 +11107,9 @@ def _stabilize_final_prompt_text(
             text = _normalize_role_sentence(text, primary_code, sub_code, prompt_language)
         return text
 
-    if _looks_structured_prompt(text) and not is_music_mode:
+    # 決定性模式下不要再把已成形的提示詞壓回三段式 fallback；
+    # 否則會把較好的領域提示詞退化成空泛模板句。
+    if FINAL_PROMPT_USE_LLM and _looks_structured_prompt(text) and not is_music_mode:
         text = naturalize_prompt_to_paragraphs(
             prompt_text=text,
             prompt_language=prompt_language,
