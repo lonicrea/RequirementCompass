@@ -7742,6 +7742,11 @@ def _derive_dialogue_content_focus(signal: Dict[str, str], idea: str, fields: Di
         add_point("分析時區分基本面、技術面、消息面與風險，不要混成一句空話。")
         add_point("避免直接下買賣指令，改提供可查核的判讀框架與下一步。")
 
+    if any(token in merged_text for token in ["歷史", "历史", "希臘", "希腊", "羅馬", "罗马", "神話", "神话", "文明", "城邦", "戰爭", "战争"]):
+        add_point("先界定你要看的歷史時期、主題與分析角度，再往下展開。")
+        add_point("區分史實、史學解釋與常見誤解，不要把不同層次混在一起。")
+        add_point("若需要論述或寫作，補上時間線、關鍵事件與資料來源建議。")
+
     if any(token in merged_text for token in ["論文", "題目", "研究", "學術"]):
         add_point("至少提出三個具體題目或研究方向，避免空泛陳述。")
         add_point("每個題目都要附研究範圍、方法與資料來源建議。")
@@ -7949,6 +7954,15 @@ def _is_stock_analysis_like_dialogue(text: str) -> bool:
     return any(token in lowered for token in tokens)
 
 
+def _is_history_analysis_like_dialogue(text: str) -> bool:
+    lowered = str(text or "").lower()
+    tokens = [
+        "歷史", "历史", "希臘", "希腊", "羅馬", "罗马", "古希臘", "古希腊",
+        "城邦", "文明", "神話", "神话", "戰爭", "战争", "帝國", "帝国",
+    ]
+    return any(token in lowered for token in tokens)
+
+
 def _derive_dialogue_expert_role(
     primary_code: str,
     key_sub: str,
@@ -7971,6 +7985,9 @@ def _derive_dialogue_expert_role(
 
     if _is_stock_analysis_like_dialogue(text):
         return "資深股市研究與投資分析顧問"
+
+    if _is_history_analysis_like_dialogue(text):
+        return "歷史研究與論述分析顧問"
 
     default_by_primary = {
         "1": "研究分析顧問",
@@ -8528,6 +8545,17 @@ def _build_dialogue_solution_prompt(
         ]
     workflow = [str(item).strip("。 ") for item in workflow if str(item).strip()][:5]
 
+    def _render_audience_clause(audience_text: str) -> str:
+        audience = str(audience_text or "").strip("。 ")
+        if not audience:
+            return "這次內容主要面向一般使用者。"
+        if audience.startswith("給"):
+            audience = audience[1:].strip()
+            return f"這次內容主要寫給{audience}。"
+        if audience.startswith(("面向", "針對")):
+            return f"這次內容{audience}。"
+        return f"這次內容主要面向{audience}。"
+
     intro = _render_role_intro(role, prompt_language)
     english_output = _is_english_language(prompt_language)
 
@@ -8535,44 +8563,41 @@ def _build_dialogue_solution_prompt(
         context_sentence = f" The active context is {context_anchor}." if context_anchor else ""
         depth_sentence = f" Target response depth: {scope_depth}." if scope_depth else ""
         paragraph_1 = (
-            f"{intro}. Your core task is {task_goal}. "
-            f"You mainly support {target_audience}.{context_sentence} "
-            f"Deliver the final output as {output_format}.{depth_sentence}"
+            f"{intro}. This conversation focuses on {task_goal}, and you are mainly helping {target_audience}.{context_sentence}"
+            f"{depth_sentence} Shape the final result so it can be used directly as {output_format}."
         )
         paragraph_2 = (
-            "Use a general prompt-engineering workflow: clarify Role and Task first, inject Context second, "
-            "then set Constraints and Output format before answering. If user requirements conflict, always prioritise "
-            "the user's latest explicit instruction. If examples are provided, extract reusable patterns; for complex tasks, "
-            "reason step by step before giving conclusions."
+            "Start by clarifying the user's actual objective, limits, and missing context before giving conclusions. "
+            "If requirements conflict, follow the user's latest explicit instruction. When examples are provided, absorb their useful patterns, "
+            "but rewrite them into natural task instructions instead of copying template language."
         )
         paragraph_3 = (
-            f"Conversation rules: {tone_boundary}; {turn_rules}; correction policy: {correction_policy}. "
-            f"Execution focus: {'; '.join(response_strategy[:3])}. "
-            f"Content focus: {'; '.join(focus_points[:3])}. "
-            f"Suggested process: {'; '.join(workflow[:4])}. "
-            "Run quality self-check on clarity, completeness, executability, constraint compliance, and repeatability. "
-            f"Success criteria: {'; '.join(success_checks)}."
+            f"Keep the interaction aligned with these rules: {tone_boundary}; {turn_rules}; correction policy: {correction_policy}. "
+            f"While responding, prioritise {'; '.join(response_strategy[:3])}. "
+            f"Make sure the content covers {'; '.join(focus_points[:3])}, and generally work through {'; '.join(workflow[:4])}. "
+            "Before finishing each answer, self-check for clarity, completeness, executability, constraint compliance, and repeatability. "
+            f"The work is successful when {'; '.join(success_checks)}."
         )
     else:
-        context_sentence = f"本次對話脈絡是「{context_anchor}」。" if context_anchor else ""
+        context_sentence = f"這次對話圍繞「{context_anchor}」展開。" if context_anchor else ""
         depth_sentence = f"回答深度以「{scope_depth}」為準。" if scope_depth else ""
+        audience_clause = _render_audience_clause(target_audience)
         paragraph_1 = (
-            f"{intro}，你的核心任務是{task_goal}，主要服務對象是{target_audience}。"
-            f"{context_sentence}{depth_sentence}最終交付請使用「{output_format}」。"
+            f"{intro}。{audience_clause}你這次主要要處理的是「{task_goal}」。"
+            f"{context_sentence}{depth_sentence}最終交付請整理成可直接作為「{output_format}」使用的內容。"
         )
         paragraph_2 = (
-            "請用通用提示詞框架執行：先明確角色與任務，再補足上下文，接著設定限制條件與輸出格式後再回答。"
-            "若需求互相衝突，優先採用使用者最新且最明確的指令。"
-            "若有範例，先抽取可複用模式；遇到複雜問題時，先分步推理再下結論。"
+            "回答時先釐清使用者真正想解決的問題、限制條件與缺失資訊，再給結論。"
+            "如果需求彼此衝突，優先採用使用者最新且最明確的指令。"
+            "若使用者提供範例，請吸收其中可用的模式，但要改寫成自然、完整、可執行的任務說明，不要保留模板腔。"
         )
         paragraph_3 = (
-            f"對話規則：{tone_boundary}；{turn_rules}；糾錯方式：{correction_policy}。"
-            f"執行重點：{'；'.join(response_strategy[:3])}。"
-            f"內容重點：{'；'.join(focus_points[:3])}。"
-            f"建議流程：{'；'.join(workflow[:4])}。"
-            "每回合都要做品質自檢（清晰度、完整度、可執行性、約束性、可重複性）。"
-            f"成功標準：{'；'.join(success_checks)}。"
-            f"另外請遵守：{execution_focus.strip('。')}；{method_rule.strip('。')}。"
+            f"互動時請保持{tone_boundary}，並遵守{turn_rules}；如果需要糾錯，就用「{correction_policy}」的方式處理。"
+            f"回答時請優先做到{'、'.join(response_strategy[:3])}，並把重點放在{'、'.join(focus_points[:3])}。"
+            f"整體可依序沿著{'、'.join(workflow[:4])}推進，並在每回合結束前檢查清晰度、完整度、可執行性、約束性與可重複性。"
+            f"只有在{success_checks[0]}，並且{success_checks[1] if len(success_checks) > 1 else '回覆內容具備可執行性'}"
+            f"{f'，同時{success_checks[2]}' if len(success_checks) > 2 else ''}時，才算真正達成目標。"
+            f"另外請同時遵守：{execution_focus.strip('。')}；{method_rule.strip('。')}。"
         )
 
     return "\n\n".join([paragraph_1.strip(), paragraph_2.strip(), paragraph_3.strip()]).strip()
